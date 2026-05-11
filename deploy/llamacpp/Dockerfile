@@ -32,18 +32,12 @@ RUN set -eux; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RELEASE}/llama-${LLAMA_CPP_RELEASE}-bin-${SUFFIX}.tar.gz"; \
-    echo "level=info service=llamacpp_build msg=downloading url=${URL}"; \
     curl -fL "${URL}" -o /tmp/llama.tgz; \
-    mkdir -p /tmp/extract; \
-    tar -xzf /tmp/llama.tgz -C /tmp/extract; \
-    EXTRACT_DIR="$(find /tmp/extract -maxdepth 1 -type d -name 'llama-*' | head -n1)"; \
-    test -n "${EXTRACT_DIR}"; \
-    cp "${EXTRACT_DIR}/llama-server" /usr/local/bin/llama-server; \
-    chmod +x /usr/local/bin/llama-server; \
-    find "${EXTRACT_DIR}" -name '*.so*' -exec cp {} /usr/local/lib/ \; ; \
-    ldconfig; \
-    rm -rf /tmp/extract /tmp/llama.tgz; \
-    /usr/local/bin/llama-server --version
+    mkdir -p /opt/llama; \
+    tar -xzf /tmp/llama.tgz -C /opt/llama --strip-components=1; \
+    ln -s /opt/llama/llama-server /usr/local/bin/llama-server; \
+    chmod +x /opt/llama/llama-server; \
+    rm -f /tmp/llama.tgz
 
 RUN useradd -m -u 1001 -s /bin/bash llama
 
@@ -61,7 +55,7 @@ ENV MODEL_PATH=/models/model.gguf \
     EXTRA_ARGS=""
 
 EXPOSE 8080
-
+ENV LD_LIBRARY_PATH=/usr/local/lib/llama
 USER llama
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=5 \

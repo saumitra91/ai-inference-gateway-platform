@@ -19,6 +19,8 @@
 #   EXTRA_ARGS      – any additional flags appended verbatim to the command
 # ---------------------------------------------------------------------------
 set -eu
+export LD_LIBRARY_PATH=/opt/llama:$LD_LIBRARY_PATH
+export GGML_BACKEND_PATH=/opt/llama
 
 log() {
     # Print structured key=value log line to stdout so Docker's log driver
@@ -85,9 +87,10 @@ log "msg=starting model_path=${MODEL_PATH} context_size=${CONTEXT_SIZE} num_thre
 #
 # shellcheck disable=SC2086
 exec llama-server \
-    --model "${MODEL_PATH}" \
-    --ctx-size "${CONTEXT_SIZE}" \
-    --threads "${NUM_THREADS}" \
-    --host "${HOST}" \
-    --port "${PORT}" \
-    ${EXTRA_ARGS}
+  --jinja \
+  --model "${MODEL_PATH}" \
+  --host "${HOST}" \
+  --port "${PORT}" \
+  --ctx-size "${CONTEXT_SIZE}" \
+  --threads "${NUM_THREADS}" \
+  ${EXTRA_ARGS}
