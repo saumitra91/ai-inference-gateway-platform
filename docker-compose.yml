@@ -24,24 +24,37 @@ services:
       timeout: 3s
       retries: 10
 
-  # Pin by digest in production; `server` tracks latest server build on GHCR.
   llamacpp:
-    image: ghcr.io/ggerganov/llama.cpp:server
-    command:
-      - -m
-      - /models/model.gguf
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8080"
-      - -c
-      - "4096"
-      - --threads
-      - "4"
+    build:
+      context: ./deploy/llamacpp
+      dockerfile: Dockerfile
+      # LLAMA_CPP_TAG pins the exact git tag built inside the container.
+      # Bump this intentionally; never use a floating "latest" for a model
+      # serving layer you depend on for correctness and reproducibility.
+      args:
+        LLAMA_CPP_TAG: b5100
+    image: local/llamacpp:b5100
+    environment:
+      MODEL_PATH: /models/model.gguf
+      CONTEXT_SIZE: "4096"
+      # NUM_THREADS: set to "auto" to detect at runtime, or pin explicitly.
+      # Rule of thumb: pin to (physical_cores - 1) for best throughput on a
+      # shared machine; overcommitting threads causes context-switch thrash.
+      NUM_THREADS: "auto"
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      # EXTRA_ARGS: space-separated additional flags, e.g. "--no-mmap --flash-attn"
+      EXTRA_ARGS: ""
     volumes:
       - ./models:/models:ro
     expose:
       - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
 
   django:
     build:
@@ -68,7 +81,7 @@ services:
       redis:
         condition: service_healthy
       llamacpp:
-        condition: service_started
+        condition: service_healthy
     expose:
       - "8000"
     healthcheck:
