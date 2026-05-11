@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}API key created · Inference Control Plane{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <h1>API key created</h1>
+    <p class="muted">Copy this now. It will not be shown again.</p>
+  </header>
+
+  <section class="card" style="max-width: 920px">
+    <pre class="code"><code>{{ raw_key }}</code></pre>
+    <p class="muted small">Use: <code>Authorization: Bearer {{ raw_key }}</code> against <code>/v1/chat/completions</code>.</p>
+    <a class="btn primary" href="{% url 'dashboard:api_keys_create' %}">Create another</a>
+  </section>
+{% endblock %}

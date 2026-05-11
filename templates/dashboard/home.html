@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Overview · Inference Control Plane{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <h1>Overview</h1>
+    <p class="muted">
+      Django orchestrates policy, identity, quotas, and observability. Model weights and kernels stay in
+      <code>llama.cpp</code> over HTTP. The dashboard uses Django sessions; programmatic access uses hashed API keys.
+    </p>
+  </header>
+
+  <section class="grid">
+    <article class="card">
+      <h2>Runtime topology</h2>
+      <ul class="list">
+        <li><span class="pill ok">edge</span> NGINX terminates HTTP and forwards to Django (ASGI).</li>
+        <li><span class="pill ok">control plane</span> Django validates requests and proxies OpenAI-compatible payloads.</li>
+        <li><span class="pill warn">data plane</span> llama.cpp serves <code>/v1/chat/completions</code> on the internal network.</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <h2>Health</h2>
+      <p class="muted">Kubernetes-style probes map cleanly to load balancers and compose healthchecks.</p>
+      <ul class="list">
+        <li><code>/health/live</code> — process up (cheap).</li>
+        <li><code>/health/ready</code> — database reachable.</li>
+        <li><code>/metrics</code> — Prometheus scrape (treat as sensitive in production).</li>
+      </ul>
+    </article>
+
+    <article class="card span-2">
+      <h2>Configuration</h2>
+      <p class="muted">Django never loads GGUF weights. It only needs the upstream base URL.</p>
+      <pre class="code"><code>LLAMA_CPP_BASE_URL={{ llama_cpp_base_url|default:"(unset)" }}</code></pre>
+    </article>
+  </section>
+{% endblock %}

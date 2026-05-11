@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Chat · Inference Control Plane{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <h1>Chat</h1>
+    <p class="muted">
+      Browser streaming uses <code>fetch()</code> + ReadableStream (SSE over POST). HTMX handles non-streaming
+      interactions elsewhere; token streams are not a good fit for HTMX alone.
+    </p>
+  </header>
+
+  <section class="chat-layout card">
+    <div class="chat-controls">
+      <label class="field">
+        <span>Model id (passed through)</span>
+        <input id="model" class="input" value="default" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>System prompt</span>
+        <textarea id="system" class="input" rows="3">You are a concise engineering assistant.</textarea>
+      </label>
+      <label class="field">
+        <span>User message</span>
+        <textarea id="user" class="input" rows="5">Explain why separating the control plane from llama.cpp matters for production LLM serving.</textarea>
+      </label>
+      <div class="row">
+        <button id="send" class="btn primary" type="button">Stream completion</button>
+        <button id="stop" class="btn" type="button" disabled>Stop</button>
+      </div>
+      <p class="muted small">
+        Endpoint: <code>/ui/v1/chat/completions</code> (session + CSRF). Programmatic clients should use
+        <code>/v1/chat/completions</code> with <code>Authorization: Bearer sk_local_…</code>.
+      </p>
+    </div>
+    <div class="chat-output">
+      <div class="chat-output-header">Assistant</div>
+      <pre id="out" class="chat-output-body"></pre>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+  <script src="{% static 'dashboard/chat_stream.js' %}" defer></script>
+{% endblock %}

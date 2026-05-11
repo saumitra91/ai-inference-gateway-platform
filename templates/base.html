@@ -1,0 +1,38 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Inference Control Plane{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="{% static 'dashboard/theme.css' %}" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">local-llm<span class="accent">.platform</span></div>
+        <nav class="nav">
+          <a href="{% url 'dashboard:home' %}">Overview</a>
+          <a href="{% url 'dashboard:chat' %}">Chat</a>
+          {% if user.is_staff %}
+            <a href="{% url 'dashboard:api_keys_create' %}">API keys</a>
+          {% endif %}
+          <a href="/metrics" target="_blank" rel="noreferrer">Prometheus metrics</a>
+          <a href="/admin/" target="_blank" rel="noreferrer">Admin</a>
+          {% if user.is_authenticated %}
+            <form class="nav-form" method="post" action="/accounts/logout/">
+              {% csrf_token %}
+              <button class="btn nav-logout" type="submit">Log out</button>
+            </form>
+          {% else %}
+            <a class="btn nav-logout" href="/accounts/login/">Log in</a>
+          {% endif %}
+        </nav>
+        <div class="sidebar-footer">Phase 2 — session UI + hashed API keys</div>
+      </aside>
+      <main class="main">{% block content %}{% endblock %}</main>
+    </div>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>
