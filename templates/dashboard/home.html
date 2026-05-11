@@ -15,7 +15,7 @@
       <ul class="list">
         <li><span class="pill ok">edge</span> NGINX terminates HTTP and forwards to Django (ASGI).</li>
         <li><span class="pill ok">control plane</span> Django validates requests and proxies OpenAI-compatible payloads.</li>
-        <li><span class="pill warn">data plane</span> llama.cpp serves <code>/v1/chat/completions</code> on the internal network.</li>
+        <li><span class="pill warn">data plane</span> llama-server (prebuilt CPU binary) exposes OpenAI-compatible HTTP on the internal network; NGINX routes <code>/v1/*</code> to the FastAPI gateway.</li>
       </ul>
     </article>
 

@@ -6,8 +6,8 @@ This repository is intentionally built in **phases**. Phase 1 delivers: project 
 
 ## What you get in Phase 1
 
-- **OpenAI-compatible** `POST /v1/chat/completions` with **SSE streaming** and non-streaming JSON.
-- **Inference backend abstraction** (`InferenceBackend` protocol) with an **HTTP llama.cpp** implementation.
+- **OpenAI-compatible** `POST /v1/chat/completions` with **SSE streaming** and non-streaming JSON (via **FastAPI gateway** + nginx).
+- **Inference backend abstraction** (`InferenceBackend` protocol) with an **HTTP llama.cpp** implementation (Django UI path; gateway uses httpx directly).
 - **Observability hooks**: `/health/live`, `/health/ready`, `/metrics`, JSON logs, `X-Request-ID` propagation.
 - **Docker Compose** wiring for Django, Postgres, Redis, NGINX, Prometheus, Grafana, and a `llamacpp` service.
 - **Dashboard** (server-rendered templates + a tiny amount of JS for POST streaming).
@@ -17,21 +17,27 @@ This repository is intentionally built in **phases**. Phase 1 delivers: project 
 ```mermaid
 flowchart LR
   U[Browser / Client] --> N[NGINX]
-  N --> D[Django ASGI\n(control plane)]
-  D -->|HTTP OpenAI API| L[llama.cpp server\n(data plane)]
-  D --> P[(Postgres)]
-  D --> R[(Redis)]
-  Pr[Prometheus] -->|scrape /metrics| D
-  G[Grafana] --> Pr
+  N -->|/v1/* OpenAI API| G[FastAPI gateway]
+  N -->|/ admin dashboard| D[Django ASGI]
+  G -->|HTTP| L[llama-server\nprebuilt binary]
+  G --> P[(Postgres)]
+  G --> R[(Redis)]
+  D -->|UI inference| L
+  D --> P
+  D --> R
+  Pr[Prometheus] -->|scrape| D
+  Pr -->|scrape| G
+  Graf[Grafana] --> Pr
 ```
 
-### Request lifecycle (streaming)
+### Request lifecycle (streaming, programmatic)
 
-1. **Client** sends `POST /v1/chat/completions` with `stream: true` to NGINX (or directly to Uvicorn while developing).
-2. **Django** validates JSON into a **Pydantic** model (`ChatCompletionRequest`) so invalid payloads fail fast and consistently.
-3. Django increments Prometheus counters/gauges and starts an **httpx** streaming request to `LLAMA_CPP_BASE_URL/v1/chat/completions`.
-4. Django **forwards upstream bytes** as a `StreamingHttpResponse` (`text/event-stream`). This preserves compatibility with OpenAI-style clients without re-parsing token frames in Python (important for latency and correctness).
-5. If the upstream is down, Django emits an SSE error chunk (streaming) or an OpenAI-style JSON error (non-streaming).
+1. **Client** sends `POST /v1/chat/completions` with `stream: true` to **NGINX** (Compose: `http://localhost:8888/...`).
+2. **FastAPI gateway** verifies the **Bearer API key** (same HMAC digest as Django), applies **Redis RPM limits**, and proxies to `llamacpp:8080`.
+3. The gateway **streams raw SSE bytes** from llama-server and records **structured logs** plus optional **Postgres audit rows** (`InferenceRequestLog`).
+4. For **dashboard chat**, the browser still uses **Django** `POST /ui/v1/chat/completions` (session + CSRF); Django’s `ChatCompletionService` talks to llama-server directly.
+
+Direct gateway (no nginx): `http://127.0.0.1:18081/v1/...` when Compose publishes the gateway port.
 
 ### Why this separation matters
 
@@ -51,7 +57,7 @@ flowchart LR
 │   ├── observability/   # logs, metrics, health, request correlation
 │   └── users/           # Phase 2: profiles, orgs, quotas (optional custom user)
 ├── config/              # Django project settings (split by environment)
-├── deploy/              # NGINX + Prometheus + Grafana provisioning
+├── deploy/              # NGINX, Prometheus, Grafana, llama runtime, FastAPI gateway
 ├── docker-compose.yml
 ├── Dockerfile
 ├── models/              # GGUF mount directory (not read by Django)
@@ -144,7 +150,7 @@ docker compose up --build
 
 ## Phase roadmap
 
-- **Phase 2 (current)**: Hashed API keys (`sk_local_…`), Bearer auth for `/v1/*`, session+CSRF for `/ui/v1/*`, per-key RPM limits, per-user daily quotas (UTC), redacted `InferenceRequestLog`, audit log for key lifecycle events, expanded Prometheus metrics, optional `/metrics` scrape token, optional llama readiness checks, operational `/health` + `/ready` aliases, and `docs/architecture.md`.
+- **Phase 2 (current)**: Hashed API keys (`sk_local_…`), **FastAPI gateway** for Bearer `/v1/*` (nginx-routed), session+CSRF for `/ui/v1/*` on Django, per-key RPM limits (gateway + Redis), per-user daily quotas on the **UI** path (Django), redacted `InferenceRequestLog`, audit log for key lifecycle events, Prometheus on Django + gateway, optional llama readiness checks, and `docs/architecture.md`.
 - **Phase 3**: hardened NGINX TLS, secrets management, systemd unit files, Grafana dashboards as code, production settings enforcement.
 - **Phase 4**: benchmark harness, regression gates, performance tuning notes for CPU-first inference.
 

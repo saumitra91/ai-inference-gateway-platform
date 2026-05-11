@@ -29,8 +29,9 @@
         <button id="stop" class="btn" type="button" disabled>Stop</button>
       </div>
       <p class="muted small">
-        Endpoint: <code>/ui/v1/chat/completions</code> (session + CSRF). Programmatic clients should use
-        <code>/v1/chat/completions</code> with <code>Authorization: Bearer sk_local_…</code>.
+        Endpoint: <code>/ui/v1/chat/completions</code> (session + CSRF). Programmatic clients use
+        <code>/v1/chat/completions</code> with <code>Authorization: Bearer sk_local_…</code> via NGINX (e.g.
+        <code>http://localhost:8888</code>) or directly on <code>127.0.0.1:18081</code> (gateway publish port).
       </p>
     </div>
     <div class="chat-output">

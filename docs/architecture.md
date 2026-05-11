@@ -7,11 +7,16 @@ This document is the living engineering record for the inference **control plane
 ```mermaid
 flowchart TB
   Client[Clients / scripts / dashboard] --> Edge[NGINX]
-  Edge --> Django[Django ASGI (Uvicorn)]
-  Django --> PG[(Postgres)]
-  Django --> Redis[(Redis)]
-  Django -->|OpenAI HTTP| Llama[llama.cpp server]
+  Edge -->|/v1| Gateway[FastAPI gateway]
+  Edge -->|other| Django[Django ASGI]
+  Gateway --> PG[(Postgres)]
+  Gateway --> Redis[(Redis)]
+  Gateway -->|OpenAI HTTP| Llama[llama-server]
+  Django --> PG
+  Django --> Redis
+  Django -->|UI path| Llama
   Prom[Prometheus] -->|scrape /metrics| Django
+  Prom --> Gateway
   Graf[Grafana] --> Prom
 ```
 
@@ -22,38 +27,36 @@ flowchart TB
 ```mermaid
 sequenceDiagram
   participant C as Client
-  participant D as Django
+  participant N as NGINX
+  participant G as FastAPI gateway
   participant R as Redis
   participant P as Postgres
-  participant L as llama.cpp
+  participant L as llama-server
 
-  C->>D: Authorization: Bearer sk_local_...
-  D->>D: Parse + verify HMAC digest (constant-time)
-  D->>R: RPM window counter (per API key)
+  C->>N: POST /v1/chat/completions
+  N->>G: proxy
+  G->>G: Parse + verify HMAC digest (constant-time)
+  G->>R: RPM window counter (per API key)
   alt over limit
-    D-->>C: 429
+    G-->>C: 429
   end
-  D->>R: Daily quota check (per user, UTC day)
-  alt over quota
-    D-->>C: 429
-  end
-  D->>L: Proxy JSON/SSE (X-Request-ID forwarded)
-  L-->>D: stream bytes / JSON
-  D->>P: Persist redacted InferenceRequestLog
-  D->>D: Bump APIKey counters + last_used_at
-  D-->>C: SSE or JSON
+  G->>L: Proxy JSON/SSE (X-Request-ID forwarded)
+  L-->>G: stream bytes / JSON
+  G->>P: Persist redacted InferenceRequestLog (optional)
+  G->>P: Bump APIKey last_used + requests_count
+  G-->>C: SSE or JSON
 ```
 
 ### Dashboard chat completion (`POST /ui/v1/chat/completions`)
 
-Same orchestration path (`ChatCompletionService`), but authentication is **Django session + CSRF** instead of Bearer tokens. This avoids putting long-lived API secrets into browser storage while still allowing the same downstream proxying and logging.
+Handled by **Django** (`ChatCompletionService`): **Django session + CSRF** instead of Bearer tokens; optional per-user quotas and the same llama-server upstream. Programmatic traffic is intentionally separated so the gateway can scale independently of the Django admin/dashboard tier.
 
 ## Streaming lifecycle (SSE over HTTP)
 
-1. Django validates JSON into `ChatCompletionRequest`.
-2. Django opens an **httpx async stream** to llama.cpp and begins forwarding **raw bytes** as `StreamingHttpResponse`.
-3. A lightweight SSE parser counts **estimated completion tokens** and measures **TTFT** without re-serializing upstream frames to clients.
-4. On **client disconnect**, cancellation propagates to async generators; upstream connections should be closed by httpx context managers.
+1. **Gateway path (`/v1`)**: FastAPI forwards the body to llama-server over **httpx** streaming and relays **raw SSE bytes** to the client.
+2. **UI path (`/ui/v1`)**: Django validates JSON into `ChatCompletionRequest`, then streams via `StreamingHttpResponse`.
+3. Django’s service path includes a lightweight SSE parser for token estimates and **TTFT**; the gateway logs wall time and throughput for programmatic calls.
+4. On **client disconnect**, cancellation should propagate; upstream connections should be closed by httpx context managers.
 
 **Tradeoff — SSE vs WebSockets**
 

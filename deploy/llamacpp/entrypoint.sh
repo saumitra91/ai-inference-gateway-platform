@@ -32,6 +32,11 @@ log_error() {
 }
 
 # ---------------------------------------------------------------------------
+# 0. Architecture / runtime visibility (helps debug ARM vs x86 mixups)
+# ---------------------------------------------------------------------------
+log "msg=startup_probe uname_m=$(uname -m) uname_s=$(uname -s) num_threads_cfg=${NUM_THREADS}"
+
+# ---------------------------------------------------------------------------
 # 1. Thread count auto-detection
 #    If NUM_THREADS is 0 or "auto", detect available CPU count and apply a
 #    conservative heuristic: leave one core for the OS / Django process.

@@ -28,12 +28,9 @@ services:
     build:
       context: ./deploy/llamacpp
       dockerfile: Dockerfile
-      # LLAMA_CPP_TAG pins the exact git tag built inside the container.
-      # Bump this intentionally; never use a floating "latest" for a model
-      # serving layer you depend on for correctness and reproducibility.
       args:
-        LLAMA_CPP_TAG: b5100
-    image: local/llamacpp:b5100
+        LLAMA_CPP_RELEASE: b9106
+    image: local/llamacpp:b9106
     environment:
       MODEL_PATH: /models/model.gguf
       CONTEXT_SIZE: "4096"
@@ -55,6 +52,39 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
+
+  gateway:
+    build:
+      context: ./deploy/gateway
+      dockerfile: Dockerfile
+    image: local/inference-gateway:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://platform:platform@postgres:5432/platform
+      REDIS_URL: redis://redis:6379/0
+      UPSTREAM_LLAMA_URL: http://llamacpp:8080
+      SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
+      API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
+      GATEWAY_PERSIST_LOGS: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llamacpp:
+        condition: service_healthy
+    expose:
+      - "8081"
+    ports:
+      - "127.0.0.1:18081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8081/health"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 25s
 
   django:
     build:
@@ -103,6 +133,8 @@ services:
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       django:
+        condition: service_healthy
+      gateway:
         condition: service_healthy
 
   prometheus:

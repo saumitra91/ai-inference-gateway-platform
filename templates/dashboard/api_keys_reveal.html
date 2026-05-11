@@ -8,7 +8,9 @@
 
   <section class="card" style="max-width: 920px">
     <pre class="code"><code>{{ raw_key }}</code></pre>
-    <p class="muted small">Use: <code>Authorization: Bearer {{ raw_key }}</code> against <code>/v1/chat/completions</code>.</p>
+    <p class="muted small">
+      Use: <code>Authorization: Bearer {{ raw_key }}</code> against <code>/v1/chat/completions</code> (via NGINX on port 8888, or gateway on 18081).
+    </p>
     <a class="btn primary" href="{% url 'dashboard:api_keys_create' %}">Create another</a>
   </section>
 {% endblock %}

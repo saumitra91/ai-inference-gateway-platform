@@ -15,7 +15,7 @@ urlpatterns = [
     path("ready", ready_view, name="ready"),
     path("metrics", metrics_view, name="metrics"),
     path("internal/model-status", model_status_view, name="model_status"),
-    path("v1/", include(("apps.inference.urls", "inference"), namespace="inference")),
+    # OpenAI-compatible /v1/* is served by the FastAPI gateway (see deploy/gateway + nginx).
     path("ui/v1/", include(("apps.inference.ui_urls", "inference_ui"), namespace="inference_ui")),
     path("", include(("apps.dashboard.urls", "dashboard"), namespace="dashboard")),
 ]
