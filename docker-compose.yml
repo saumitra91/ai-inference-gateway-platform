@@ -46,6 +46,8 @@ services:
       - ./models:/models:ro
     expose:
       - "8080"
+    ports:
+      - "8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
       interval: 30s
