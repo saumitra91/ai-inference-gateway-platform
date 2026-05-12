@@ -1,126 +1,352 @@
-# Architecture — Phase 2 (control plane + observability)
-
-This document is the living engineering record for the inference **control plane**. It complements `README.md` with diagrams, lifecycles, and explicit tradeoffs.
+# Architecture — LLM Inference Control Plane
 
 ## System context
 
 ```mermaid
-flowchart TB
-  Client[Clients / scripts / dashboard] --> Edge[NGINX]
-  Edge -->|/v1| Gateway[FastAPI gateway]
-  Edge -->|other| Django[Django ASGI]
-  Gateway --> PG[(Postgres)]
-  Gateway --> Redis[(Redis)]
-  Gateway -->|OpenAI HTTP| Llama[llama-server]
-  Django --> PG
-  Django --> Redis
-  Django -->|UI path| Llama
-  Prom[Prometheus] -->|scrape /metrics| Django
-  Prom --> Gateway
-  Graf[Grafana] --> Prom
+graph TB
+    UI["Browser / Dashboard"]
+    CLI["curl / OpenAI SDK"]
+    N["NGINX (port 8888)"]
+    D["Django ASGI (port 8000)"]
+    G["FastAPI Gateway (port 8081)"]
+    L["llama-server (port 8080)"]
+    PG[("Postgres")]
+    R[("Redis")]
+    P["Prometheus"]
+    GR["Grafana"]
+
+    UI --> N
+    CLI --> N
+
+    N --> G
+    N --> D
+
+    G --> L
+    D --> L
+
+    G --> PG
+    G --> R
+    D --> PG
+    D --> R
+
+    P --> D
+    P --> G
+    GR --> P
 ```
+
+## Container topology
+
+| Service | Image / Build | Ports | Purpose |
+|---|---|---|---|
+| **nginx** | `nginx:1.27-alpine` | `8888:80` | Edge proxy — routes `/v1/*` to gateway, everything else to Django |
+| **django** | Local `Dockerfile` | `8000` (internal) | Control plane: dashboard UI, session auth, admin, observability |
+| **gateway** | `deploy/gateway/Dockerfile` | `8081` (internal), `127.0.0.1:18081:8081` | Programmatic OpenAI API surface with API key auth + rate limiting |
+| **llamacpp** | `deploy/llamacpp/Dockerfile` | `8080` (internal) | Model inference — `llama-server` exposing OpenAI-compatible HTTP API |
+| **postgres** | `postgres:16-alpine` | `5432` (internal) | Primary database: Django models, gateway audit logs |
+| **redis** | `redis:7-alpine` | `6379` (internal) | Rate limiting, daily quotas, caching |
+| **prometheus** | `prom/prometheus:v2.53.0` | `9090:9090` | Metrics collection from Django + gateway |
+| **grafana** | `grafana/grafana:11.2.0` | `3000:3000` | Dashboard visualization (default: `admin`/`admin`) |
 
 ## Request lifecycles
 
-### Programmatic chat completion (`POST /v1/chat/completions`)
+### Programmatic path (`POST /v1/chat/completions`)
 
 ```mermaid
 sequenceDiagram
   participant C as Client
   participant N as NGINX
-  participant G as FastAPI gateway
+  participant G as FastAPI Gateway
   participant R as Redis
   participant P as Postgres
   participant L as llama-server
 
-  C->>N: POST /v1/chat/completions
-  N->>G: proxy
-  G->>G: Parse + verify HMAC digest (constant-time)
-  G->>R: RPM window counter (per API key)
-  alt over limit
-    G-->>C: 429
+  C->>N: POST /v1/chat/completions (Bearer sk_local_...)
+  N->>G: proxy to gateway
+  G->>G: Parse + verify Bearer token (HMAC)
+  G->>P: Lookup API key by public_id
+  G->>G: Check revoked + expiry
+  G->>R: RPM rate limit check
+  alt rate limited
+    G-->>C: 429 Too Many Requests
   end
-  G->>L: Proxy JSON/SSE (X-Request-ID forwarded)
-  L-->>G: stream bytes / JSON
-  G->>P: Persist redacted InferenceRequestLog (optional)
-  G->>P: Bump APIKey last_used + requests_count
-  G-->>C: SSE or JSON
+  G->>L: POST /v1/chat/completions
+  L-->>G: SSE stream / JSON
+  G-->>C: Forward SSE / JSON
+  G->>P: Persist InferenceRequestLog (async)
 ```
 
-### Dashboard chat completion (`POST /ui/v1/chat/completions`)
+### Dashboard UI path (`POST /ui/v1/chat/completions`)
 
-Handled by **Django** (`ChatCompletionService`): **Django session + CSRF** instead of Bearer tokens; optional per-user quotas and the same llama-server upstream. Programmatic traffic is intentionally separated so the gateway can scale independently of the Django admin/dashboard tier.
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant N as NGINX
+  participant D as Django ASGI
+  participant R as Redis
+  participant P as Postgres
+  participant L as llama-server
 
-## Streaming lifecycle (SSE over HTTP)
+  B->>N: POST /ui/v1/chat/completions (Cookie + X-CSRFToken)
+  N->>D: proxy_pass
 
-1. **Gateway path (`/v1`)**: FastAPI forwards the body to llama-server over **httpx** streaming and relays **raw SSE bytes** to the client.
-2. **UI path (`/ui/v1`)**: Django validates JSON into `ChatCompletionRequest`, then streams via `StreamingHttpResponse`.
-3. Django’s service path includes a lightweight SSE parser for token estimates and **TTFT**; the gateway logs wall time and throughput for programmatic calls.
-4. On **client disconnect**, cancellation should propagate; upstream connections should be closed by httpx context managers.
+  D->>D: Session + CSRF + Auth middleware
+  D->>D: ui_chat_completions() → ChatCompletionService
 
-**Tradeoff — SSE vs WebSockets**
+  D->>D: Pydantic validate request
+  D->>D: Parse token from API key (if set)
+  D->>R: RPM rate limit check
+  D->>R: Daily quota check
 
-- **SSE** matches OpenAI-compatible clients and is easy behind reverse proxies; **WebSockets** add connection upgrade complexity and different operational failure modes.
-- SSE is **one-way**; if you need bidirectional control messages at high frequency, WebSockets may win — at the cost of more moving parts.
+  D->>L: LlamaCppBackend POST /v1/chat/completions
+  L-->>D: SSE bytes / JSON
 
-## Security model — API keys
+  D->>D: Record metrics (TTFT, latency, tokens)
+  D->>P: Persist InferenceRequestLog
+  D->>P: Bump APIKey usage
+  D->>R: Increment quota counters
 
-### Why hashed keys (not plaintext)
+  D-->>N: StreamingHttpResponse / JsonResponse
+  N-->>B: SSE stream / JSON
+```
 
-- **Database leaks** should not instantly grant model access to the world.
-- **Insider risk** is reduced: operators with DB read access still cannot exfiltrate usable secrets without also obtaining the **pepper** (`API_KEY_HMAC_PEPPER`, defaulting to `SECRET_KEY`).
+## Django internals
 
-**Operational tradeoffs**
+### URL routing (root: `config/urls.py`)
 
-- Fast verification uses **HMAC-SHA256** (not password hashing). If the pepper leaks, offline guessing becomes easier than Argon2-protected passwords — treat the pepper like a Tier-0 secret and rotate with a key rotation playbook.
-- You **cannot** recover a lost key; you revoke and re-issue.
+| Path | Target | Notes |
+|---|---|---|
+| `/accounts/login/` | `django.contrib.auth.views.LoginView` | Template: `registration/login.html` |
+| `/accounts/logout/` | `django.contrib.auth.views.LogoutView` | POST-only |
+| `/admin/` | Django admin | |
+| `/health/live` | `observability.views.live_view` | Always returns `{"status": "live"}` |
+| `/health/ready` | `observability.views.ready_view` | DB check + optional llama health |
+| `/health` | `live_view` (alias) | |
+| `/ready` | `ready_view` (alias) | |
+| `/metrics` | `observability.views.metrics_view` | Prometheus scrape endpoint |
+| `/internal/model-status` | `observability.views.model_status_view` | LLM runtime health |
+| `/ui/v1/` | `inference.ui_urls` | Session-authenticated inference |
+| `/` | `dashboard.urls` | Home, chat, API key management |
 
-### Constant-time verification
+### Middleware stack (in order)
 
-On unknown `public_id`, the code still performs a `hmac.compare_digest` against a dummy digest to reduce timing oracle signal.
+| # | Middleware | Responsibility |
+|---|---|---|
+| 1 | `SecurityMiddleware` | HSTS, SSL redirect, secure headers |
+| 2 | `RequestContextMiddleware` | Assigns/propagates `X-Request-ID`, binds to `contextvars` |
+| 3 | `WhiteNoiseMiddleware` | Serves static files from `STATIC_ROOT` |
+| 4 | `CorsMiddleware` | CORS headers for allowed origins |
+| 5 | `SessionMiddleware` | Session management via DB or Redis |
+| 6 | `CommonMiddleware` | URL normalization, `APPEND_SLASH` |
+| 7 | `CsrfViewMiddleware` | CSRF token validation for session-based UI |
+| 8 | `AuthenticationMiddleware` | Attaches `request.user` from session |
+| 9 | `MessageMiddleware` | Django messages framework |
+| 10 | `XFrameOptionsMiddleware` | Clickjacking protection |
+| 11 | `BodySizeLimitMiddleware` | Rejects bodies > 2MB (configurable) |
+| 12 | `SecurityHeadersMiddleware` | Adds `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` |
 
-## Logging & privacy defaults
+### Dashboard views (`apps/dashboard`)
 
-`InferenceRequestLog` stores **redacted previews** and aggregate sizing/token estimates — **not** full prompts by default.
+| URL | View | Auth | Template |
+|---|---|---|---|
+| `/` | `HomeView` | `LoginRequiredMixin` | `dashboard/home.html` |
+| `/chat/` | `ChatView` | `LoginRequiredMixin`, `@ensure_csrf_cookie` | `dashboard/chat.html` |
+| `/staff/api-keys/` | `StaffAPIKeyCreateView` | `LoginRequiredMixin` + `is_staff` | `dashboard/api_keys_create.html` |
+| `/staff/api-keys/reveal/` | `StaffAPIKeyRevealView` | `LoginRequiredMixin` + `is_staff` | `dashboard/api_keys_reveal.html` |
 
-`DEBUG_LOG_FULL_PROMPTS=true` is for **local debugging only** and still runs through basic redaction helpers.
+## FastAPI Gateway (`deploy/gateway`)
 
-### Why production systems often avoid full prompt retention
+### Routes
 
-- **Privacy / compliance**: prompts are user data; retention expands blast radius for legal requests and insider misuse.
-- **Security**: prompts frequently contain secrets (tokens, logs, PII).
-- **Cost**: large TEXT columns bloat backups and slow incident response queries.
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/health` | No | Liveness probe |
+| GET | `/ready` | No | DB + llama readiness |
+| GET | `/metrics` | No | Prometheus metrics |
+| POST | `/v1/chat/completions` | Bearer token | Chat completion (streaming + non-streaming) |
+| GET | `/v1/models` | Bearer token | List models from llama.cpp |
 
-**Operational tradeoff**
+### Auth flow
 
-- Debugging production incidents without prompts is harder — mitigate with **request IDs**, **metrics**, **sampling**, and **temporary elevated logging** behind break-glass processes.
+1. Extract `Bearer` token from `Authorization` header
+2. Parse with regex `^sk_local_([a-f0-9]{12})_([a-f0-9]{64})$`
+3. Lookup `APIKey` by `public_id` in Postgres (via `asyncpg`)
+4. HMAC-SHA256 comparison (constant-time) against stored hash with server pepper
+5. Verify `revoked_at IS NULL` and `expires_at` not past
+6. Return `APIKeyContext(id, user_id, rate_limit_rpm)`
 
-## Observability
+### Rate limiting
 
-- **Correlation**: `RequestContextMiddleware` assigns/propagates `X-Request-ID` and binds it into JSON logs.
-- **Metrics**: Prometheus counters/histograms for TTFT, streaming duration, rate limits, quotas, token estimates, and process RSS/CPU best-effort via `psutil`.
-- **Readiness**: `/ready` includes DB; optional llama probe via `READINESS_INCLUDE_LLAMA`.
+- Fixed 1-minute window via `redis.incr`
+- Key: `rl:rpm:{api_key_id}:{timestamp // 60}`
+- TTL: 120s on first increment
+- Gateway returns 429 if exceeded
 
-## Redis necessity
+## Inference service (`apps/inference`)
 
-Redis (or another shared cache) is important for **horizontal scaling** of rate limits and quotas. LocMem works for single-process dev, but multi-worker / multi-replica deployments require a shared store or you will under/over-enforce limits.
+### `ChatCompletionService` orchestration
 
-## Django async limitations
+1. **Parse & validate** — `ChatCompletionRequest.model_validate_json(raw_body)` (Pydantic)
+2. **Rate limit** — `consume_rate_limit(api_key)` via Redis/LocMem
+3. **Daily quota** — `check_user_daily_quota(user, ptok_est, completion_budget)` from `UserProfile` settings
+4. **Proxy upstream** — `LlamaCppBackend.stream_chat_completion()` or `.chat_completion()`
+5. **Record metrics** — TTFT, latency, tokens, errors (Prometheus)
+6. **Persist log** — `InferenceRequestLog` (async DB write)
+7. **Post hooks** — `record_user_quota_success()`, `bump_api_key_usage()`
 
-- Async views mix cleanly with **thread-sensitive ORM** when wrapped in `sync_to_async(thread_sensitive=True)` for small, bounded operations (audit writes, usage counters).
-- Heavy ORM inside hot streaming loops is an anti-pattern: keep the streaming path as **byte-forwarding** as possible.
+### `LlamaCppBackend`
 
-## CPU inference bottlenecks
+- HTTP transport only — never loads GGUF weights
+- `stream_chat_completion()` — yields SSE bytes via `httpx.AsyncClient.stream()`
+- `chat_completion()` — buffered POST with 1 retry
+- `list_models()` — GET `/v1/models`
+- Target: `LLAMA_CPP_BASE_URL/v1/chat/completions` (default: `http://llamacpp:8080`)
+- Connection pool: 100 max connections, 20 keepalive, 600s read timeout
 
-Django should remain cheap; throughput is dominated by **llama.cpp threading**, **quantization**, **context length**, and **batching** — not Python JSON parsing.
+### Pydantic schemas
 
-## Service boundaries (Phase 2)
+```python
+class ChatCompletionRequest(BaseModel):
+    model: str = "default"          # min_length=1, max_length=256
+    messages: list[ChatMessage]     # min_length=1
+    stream: bool = False
+    temperature: float | None       # 0.0–2.0
+    top_p: float | None             # 0.0–1.0
+    max_tokens: int | None          # 1–1,000,000
+    stop: str | list[str] | None
+    presence_penalty: float | None  # -2.0–2.0
+    frequency_penalty: float | None # -2.0–2.0
+    user: str | None
+```
 
-- **`ChatCompletionService`**: policy orchestration + metrics + logging + streaming lifecycle.
-- **`LlamaCppBackend`**: HTTP transport only.
-- **`apps.api_keys.services.*`**: issuance, verification, audit, limits.
-- **`apps.observability.*`**: redaction helpers, runtime gauges, health endpoints.
+## Data models
 
-## Benchmarking preparation (next)
+### `UserProfile` (`apps/users`)
 
-Histograms (`TTFT_SECONDS`, `STREAMING_DURATION_SECONDS`, `UPSTREAM_LATENCY_SECONDS`) plus token counters provide the raw series for PromQL dashboards (P50/P95) and offline bench harnesses.
+| Field | Type | Description |
+|---|---|---|
+| `user` | `OneToOneField(User)` | Django auth user |
+| `daily_request_limit` | `PositiveIntegerField(null)` | Max requests per UTC day |
+| `daily_token_limit` | `PositiveIntegerField(null)` | Max tokens per UTC day |
+| `default_api_key` | `ForeignKey(APIKey, null)` | Optional default key for UI path |
+
+Auto-created via `post_save` signal when any `User` is created.
+
+### `APIKey` (`apps/api_keys`)
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `UUIDField` (PK) | |
+| `user` | `ForeignKey(User)` | Key owner |
+| `public_id` | `CharField(16, unique)` | Public identifier, e.g. `a1b2c3d4e5f6` |
+| `secret_hash` | `CharField(128)` | HMAC-SHA256 hex digest |
+| `label` | `CharField(64)` | Human-readable name |
+| `rate_limit_rpm` | `PositiveIntegerField(default=120)` | Max requests per minute |
+| `requests_count` | `BigIntegerField(default=0)` | Lifetime request counter |
+| `prompt_tokens_total` | `BigIntegerField(default=0)` | Lifetime prompt tokens |
+| `completion_tokens_total` | `BigIntegerField(default=0)` | Lifetime completion tokens |
+
+Format: `sk_local_{public_id}_{secret_component}` (12 hex + 64 hex = 128-bit + 256-bit entropy)
+
+### `InferenceRequestLog` (`apps/inference`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `UUIDField` (PK) | |
+| `request_id` | `UUIDField` | Correlates across services |
+| `user` | `ForeignKey(User, null)` | |
+| `api_key` | `ForeignKey(APIKey, null)` | |
+| `model_name` | `CharField(256)` | |
+| `stream` | `BooleanField` | |
+| `status_code` | `IntegerField` | |
+| `latency_ms` | `IntegerField` | |
+| `prompt_char_length` | `IntegerField` | |
+| `completion_tokens` | `IntegerField` | |
+| `preview` | `TextField` | Redacted, 100 chars max |
+| `full_prompt` | `TextField(null)` | Only when `DEBUG_LOG_FULL_PROMPTS=true` |
+| `error_kind` | `CharField(64, blank)` | |
+
+## Prometheus metrics inventory
+
+### Django (`/metrics`)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `inference_chat_completions_streaming_total` | Counter | — | Streaming requests |
+| `inference_chat_completions_nonstreaming_total` | Counter | — | Non-streaming requests |
+| `inference_chat_completions_errors_total` | Counter | `kind` | Error count by type |
+| `inference_upstream_wall_seconds` | Histogram | — | Wall time waiting on llama.cpp |
+| `inference_streaming_requests_in_flight` | Gauge | — | Active streaming sessions |
+| `inference_rate_limit_exceeded_total` | Counter | — | RPM limit hits |
+| `inference_quota_exceeded_total` | Counter | — | Daily quota hits |
+| `inference_time_to_first_token_seconds` | Histogram | — | TTFT (streaming) or full response (non-streaming) |
+| `inference_streaming_duration_seconds` | Histogram | — | Streaming session wall clock |
+| `inference_tokens_total` | Counter | `kind` | Estimated completion tokens |
+| `inference_chat_requests_total` | Counter | `mode` | Requests entering handler |
+| `django_process_uptime_seconds` | Gauge | — | Process uptime |
+| `django_process_resident_memory_bytes` | Gauge | — | RSS (via psutil) |
+| `django_process_cpu_percent` | Gauge | — | CPU% (via psutil) |
+
+### FastAPI Gateway (`/metrics`)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `gateway_http_requests_total` | Counter | `route`, `status` | Request count by route and status |
+| `gateway_upstream_seconds` | Histogram | — | Upstream request duration |
+| `gateway_stream_bytes_total` | Counter | — | Bytes streamed to client |
+
+## llama.cpp container
+
+### Startup sequence (`deploy/llamacpp/entrypoint.sh`)
+
+1. **Architecture probe** — logs `uname -m` for ARM vs x86 debugging
+2. **Thread auto-detection** — if `NUM_THREADS=auto`, sets to `nproc - 1`
+3. **Model validation** — checks file exists and validates GGUF magic bytes (`0x47475546`)
+4. **Exec `llama-server`** as PID 1:
+   ```sh
+   llama-server --jinja \
+     --model $MODEL_PATH \
+     --host $HOST --port $PORT \
+     --ctx-size $CONTEXT_SIZE \
+     --threads $NUM_THREADS \
+     $EXTRA_ARGS
+   ```
+
+### Model mounting
+
+- Default: `/models/model.gguf` (configurable via `MODEL_PATH`)
+- Mounted read-only from host `./models/` directory
+- The `model` field in API requests is cosmetic metadata — the actual loaded model is always the single GGUF at `MODEL_PATH`
+
+## Security model
+
+### API key hashing
+
+- Keys use format `sk_local_{public_id}_{secret}`
+- `secret_hash` stored as HMAC-SHA256(pepper, raw_key)
+- Pepper defaults to `SECRET_KEY`; should be a dedicated secret in production
+- Unknown `public_id` still performs constant-time compare against a dummy hash (timing oracle mitigation)
+- Keys can be revoked (soft-delete via `revoked_at`) or hard-deleted
+
+### CSRF
+
+- UI path uses Django session + CSRF token
+- `CSRF_TRUSTED_ORIGINS` must include the ingress origin (e.g., `http://localhost:8888`)
+- Programmatic path uses Bearer tokens routed through the FastAPI gateway (not Django)
+
+### Observability
+
+- Request IDs are propagated via `X-Request-ID` across all services
+- JSON-structured logging with `request_id` field
+- `InferenceRequestLog` stores redacted previews by default — full prompts only with `DEBUG_LOG_FULL_PROMPTS=true`
+- `/metrics` considered sensitive; should be restricted by network policy in production
+
+## Key design decisions
+
+1. **Django never loads GGUF weights** — avoids RSS spikes in the web tier; Django and llama.cpp scale independently
+2. **Separate Django ASGI and FastAPI gateway** — blast radius isolation; security patches can be rolled independently
+3. **SSE over WebSockets** — matches OpenAI client ecosystem; simpler reverse proxy handling (no upgrade)
+4. **"Forward bytes" streaming** — minimal SSE parsing in Python; throughput dominated by llama.cpp, not Django
+5. **Pydantic at boundary, plain dict upstream** — strict validation at entry, pass-through to llama.cpp
+6. **Redis optional locally** (`USE_REDIS=false`) — single-process dev works without Docker; production uses Redis
+7. **Prometheus in-process** — lowest friction for startup-internal platforms; `/metrics` as standard pattern
+8. **Static files via startup collectstatic** — bind-mounted host code means `collectstatic` runs at container start, not build time
