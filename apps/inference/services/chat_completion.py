@@ -1,4 +1,4 @@
-"""Orchestrates chat completions: auth context, quotas, upstream proxy, logging, metrics."""
+"""Orchestrates chat completions: validation, generation controls, auth, quotas, upstream proxy, logging, metrics."""
 
 from __future__ import annotations
 
@@ -10,25 +10,32 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from pydantic import ValidationError
 
 from apps.api_keys.models import APIKey
 from apps.api_keys.services.limits import check_user_daily_quota, consume_rate_limit, record_user_quota_success
-from apps.inference.exceptions import UpstreamHTTPError, UpstreamUnavailableError
+from apps.inference.exceptions import UpstreamHTTPError, UpstreamTimeoutError, UpstreamUnavailableError
 from apps.inference.metrics import (
+    ACTIVE_INFERENCE_REQUESTS,
     CHAT_COMPLETION_ERRORS,
     CHAT_COMPLETIONS_NONSTREAMING,
     CHAT_COMPLETIONS_STREAMING,
     CHAT_REQUESTS,
+    CLAMPED_REQUESTS,
+    MAX_TOKENS_REQUESTED,
     QUOTA_EXCEEDED,
     RATE_LIMIT_EXCEEDED,
+    REJECTED_REQUESTS,
     STREAMING_DURATION_SECONDS,
     STREAMING_IN_FLIGHT,
     STREAM_TOKENS,
     TTFT_SECONDS,
     UPSTREAM_LATENCY_SECONDS,
+    UPSTREAM_TIMEOUTS,
+    VALIDATION_ERRORS,
 )
 from apps.inference.schemas import ChatCompletionRequest
 from apps.inference.services.llama_cpp import LlamaCppBackend
@@ -72,69 +79,108 @@ class ChatCompletionService:
 
     async def handle(self, raw_body: bytes) -> HttpResponse:
         rid = get_request_id() or "-"
+        model_name = ""
+        stream_flag = False
 
+        # ── 1. Empty body check ────────────────────────────────────────
         if not raw_body:
-            CHAT_COMPLETION_ERRORS.labels(kind="bad_request").inc()
+            VALIDATION_ERRORS.labels(kind="empty_body").inc()
             await self._log_failure(
-                request_id=rid,
-                status=400,
-                latency_ms=0,
-                stream=False,
-                model="",
-                prompt_chars=0,
-                prompt_tok_est=0,
-                completion_tok=0,
-                preview="",
-                full_prompt="",
-                error_kind="empty_body",
+                request_id=rid, status=400, latency_ms=0, stream=False,
+                model="", prompt_chars=0, prompt_tok_est=0, completion_tok=0,
+                preview="", full_prompt="", error_kind="empty_body",
             )
             return _openai_error(message="Empty body", type_="invalid_request_error", status=400)
 
+        # ── 2. JSON parse + Pydantic validation ────────────────────────
         try:
             req = ChatCompletionRequest.model_validate_json(raw_body)
-        except ValidationError as exc:
-            CHAT_COMPLETION_ERRORS.labels(kind="validation").inc()
+        except json.JSONDecodeError as exc:
+            VALIDATION_ERRORS.labels(kind="malformed_json").inc()
             await self._log_failure(
-                request_id=rid,
-                status=400,
-                latency_ms=0,
-                stream=False,
-                model="",
-                prompt_chars=0,
-                prompt_tok_est=0,
-                completion_tok=0,
-                preview="",
-                full_prompt="",
-                error_kind="validation_error",
+                request_id=rid, status=400, latency_ms=0, stream=False,
+                model="", prompt_chars=0, prompt_tok_est=0, completion_tok=0,
+                preview="", full_prompt="", error_kind="malformed_json",
             )
-            return _openai_error(message=json.dumps(exc.errors()), type_="invalid_request_error", status=400)
+            return _openai_error(
+                message=f"Malformed JSON: {exc.args[0]}" if exc.args else "Malformed JSON",
+                type_="invalid_request_error", status=400,
+            )
+        except ValidationError as exc:
+            VALIDATION_ERRORS.labels(kind="schema_validation").inc()
+            errors = exc.errors()
+            first_msg = errors[0]["msg"] if errors else "Validation failed"
+            await self._log_failure(
+                request_id=rid, status=400, latency_ms=0, stream=False,
+                model="", prompt_chars=0, prompt_tok_est=0, completion_tok=0,
+                preview="", full_prompt="", error_kind="validation_error",
+            )
+            return _openai_error(message=first_msg, type_="invalid_request_error", status=400)
 
+        model_name = req.model
+        stream_flag = bool(req.stream)
+
+        # ── 3. Prompt size guard (before any work) ─────────────────────
         pchars = prompt_char_length(req)
+        max_prompt_chars = getattr(settings, "INFERENCE_MAX_PROMPT_CHARS", 100_000)
+        if pchars > max_prompt_chars:
+            REJECTED_REQUESTS.labels(reason="prompt_too_long").inc()
+            logger.warning("prompt_too_long", extra={
+                "request_id": rid, "prompt_chars": pchars, "max_chars": max_prompt_chars,
+            })
+            await self._log_failure(
+                request_id=rid, status=413,
+                latency_ms=0, stream=stream_flag,
+                model=model_name, prompt_chars=pchars,
+                prompt_tok_est=rough_token_estimate_from_chars(pchars),
+                completion_tok=0, preview="", full_prompt="",
+                error_kind="prompt_too_long",
+            )
+            return _openai_error(
+                message=f"Prompt exceeds maximum length of {max_prompt_chars} characters",
+                type_="invalid_request_error", status=413,
+            )
+
         ptok_est = rough_token_estimate_from_chars(pchars)
         preview = preview_from_messages(serialize_messages_for_preview(req.messages))
         full_prompt_dbg = maybe_debug_full_prompt(req.messages)
 
+        # ── 4. Apply server-side defaults + clamping ───────────────────
+        original_max_tokens = req.max_tokens
+        original_temperature = req.temperature
+        original_top_p = req.top_p
+
+        req.apply_defaults_and_clamp()
+
+        if original_max_tokens is not None and original_max_tokens != req.max_tokens:
+            CLAMPED_REQUESTS.labels(field="max_tokens").inc()
+            logger.info("clamped_max_tokens", extra={
+                "request_id": rid, "requested": original_max_tokens, "clamped_to": req.max_tokens,
+            })
+        if original_temperature is not None and original_temperature != req.temperature:
+            CLAMPED_REQUESTS.labels(field="temperature").inc()
+        if original_top_p is not None and original_top_p != req.top_p:
+            CLAMPED_REQUESTS.labels(field="top_p").inc()
+
+        MAX_TOKENS_REQUESTED.observe(req.max_tokens)
+
         CHAT_REQUESTS.labels(mode=self.mode).inc()
 
+        # ── 5. Rate limit check ────────────────────────────────────────
         if self.api_key is not None:
             rl = await sync_to_async(consume_rate_limit)(api_key=self.api_key)
             if not rl.allowed:
                 RATE_LIMIT_EXCEEDED.inc()
                 await self._log_failure(
-                    request_id=rid,
-                    status=429,
-                    latency_ms=0,
-                    stream=bool(req.stream),
-                    model=req.model,
-                    prompt_chars=pchars,
-                    prompt_tok_est=ptok_est,
-                    completion_tok=0,
-                    preview=preview,
-                    full_prompt=full_prompt_dbg,
-                    error_kind="rate_limited",
+                    request_id=rid, status=429, latency_ms=0,
+                    stream=stream_flag, model=model_name,
+                    prompt_chars=pchars, prompt_tok_est=ptok_est,
+                    completion_tok=0, preview=preview,
+                    full_prompt=full_prompt_dbg, error_kind="rate_limited",
                 )
                 return _openai_error(message="Rate limit exceeded", type_="rate_limit_error", status=429)
 
+        # ── 6. Daily quota check ───────────────────────────────────────
         pessimistic_completion_budget = max(256, ptok_est)
         quota = await sync_to_async(check_user_daily_quota)(
             user=self.actor_user,
@@ -144,24 +190,22 @@ class ChatCompletionService:
         if not quota.allowed:
             QUOTA_EXCEEDED.inc()
             await self._log_failure(
-                request_id=rid,
-                status=429,
-                latency_ms=0,
-                stream=bool(req.stream),
-                model=req.model,
-                prompt_chars=pchars,
-                prompt_tok_est=ptok_est,
-                completion_tok=0,
-                preview=preview,
+                request_id=rid, status=429, latency_ms=0,
+                stream=stream_flag, model=model_name,
+                prompt_chars=pchars, prompt_tok_est=ptok_est,
+                completion_tok=0, preview=preview,
                 full_prompt=full_prompt_dbg,
                 error_kind=quota.reason or "quota_exceeded",
             )
             return _openai_error(message="Quota exceeded", type_="rate_limit_error", status=429)
 
+        # ── 7. Upstream setup ──────────────────────────────────────────
         backend = LlamaCppBackend()
         extra_headers: dict[str, str] = {}
         if rid and rid != "-":
             extra_headers["X-Request-ID"] = rid
+
+        ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).inc()
 
         if req.stream:
             CHAT_COMPLETIONS_STREAMING.inc()
@@ -181,97 +225,127 @@ class ChatCompletionService:
             )
 
         CHAT_COMPLETIONS_NONSTREAMING.inc()
+        return await self._handle_nonstreaming(
+            backend=backend, req=req, rid=rid,
+            extra_headers=extra_headers,
+            pchars=pchars, ptok_est=ptok_est,
+            preview=preview, full_prompt_dbg=full_prompt_dbg,
+        )
+
+    async def _handle_nonstreaming(
+        self,
+        *,
+        backend: LlamaCppBackend,
+        req: ChatCompletionRequest,
+        rid: str,
+        extra_headers: dict[str, str],
+        pchars: int,
+        ptok_est: int,
+        preview: str,
+        full_prompt_dbg: str,
+    ) -> HttpResponse:
         start = time.perf_counter()
         status = 200
         completion_tokens = 0
         error_kind = ""
         body = b""
         try:
-            body = await backend.chat_completion(req, extra_headers=extra_headers)
-            status = 200
             try:
-                parsed = json.loads(body.decode("utf-8"))
-                usage = parsed.get("usage") if isinstance(parsed, dict) else None
-                if isinstance(usage, dict):
-                    completion_tokens = int(usage.get("completion_tokens") or 0)
-                    ptok_usage = int(usage.get("prompt_tokens") or 0)
-                    if ptok_usage > 0:
-                        ptok_est = ptok_usage
-            except Exception:
-                completion_tokens = max(1, rough_token_estimate_from_chars(len(body)))
-        except UpstreamUnavailableError as exc:
-            CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
-            logger.warning("upstream_unavailable", extra={"error": str(exc)})
-            status = 502
-            error_kind = "upstream_unavailable"
-            UPSTREAM_LATENCY_SECONDS.observe(time.perf_counter() - start)
+                body = await backend.chat_completion(req, extra_headers=extra_headers)
+                try:
+                    parsed = json.loads(body.decode("utf-8"))
+                    usage = parsed.get("usage") if isinstance(parsed, dict) else None
+                    if isinstance(usage, dict):
+                        completion_tokens = int(usage.get("completion_tokens") or 0)
+                        ptok_usage = int(usage.get("prompt_tokens") or 0)
+                        if ptok_usage > 0:
+                            ptok_est = ptok_usage
+                except Exception:
+                    completion_tokens = max(1, rough_token_estimate_from_chars(len(body)))
+            except UpstreamTimeoutError:
+                UPSTREAM_TIMEOUTS.inc()
+                CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
+                status = 504
+                error_kind = "upstream_timeout"
+                UPSTREAM_LATENCY_SECONDS.observe(time.perf_counter() - start)
+                await self._persist_success_log(
+                    request_id=rid, status=504,
+                    latency_ms=int((time.perf_counter() - start) * 1000),
+                    stream_duration_ms=None, ttft_ms=None,
+                    model=req.model, stream=False,
+                    prompt_chars=pchars, prompt_tok_est=ptok_est,
+                    completion_tokens=0, preview=preview,
+                    full_prompt_dbg=full_prompt_dbg,
+                    error_kind=error_kind,
+                )
+                return _openai_error(
+                    message="Upstream inference timed out",
+                    type_="api_error", status=504,
+                )
+            except UpstreamUnavailableError as exc:
+                CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
+                logger.warning("upstream_unavailable", extra={"error": str(exc)})
+                status = 502
+                error_kind = "upstream_unavailable"
+                UPSTREAM_LATENCY_SECONDS.observe(time.perf_counter() - start)
+                await self._persist_success_log(
+                    request_id=rid, status=502,
+                    latency_ms=int((time.perf_counter() - start) * 1000),
+                    stream_duration_ms=None, ttft_ms=None,
+                    model=req.model, stream=False,
+                    prompt_chars=pchars, prompt_tok_est=ptok_est,
+                    completion_tokens=0, preview=preview,
+                    full_prompt_dbg=full_prompt_dbg,
+                    error_kind=error_kind,
+                )
+                return _openai_error(message="Upstream inference unavailable", type_="api_error", status=502)
+            except UpstreamHTTPError as exc:
+                CHAT_COMPLETION_ERRORS.labels(kind="upstream_http").inc()
+                status = exc.status_code
+                error_kind = "upstream_http"
+                UPSTREAM_LATENCY_SECONDS.observe(time.perf_counter() - start)
+                await self._persist_success_log(
+                    request_id=rid, status=status,
+                    latency_ms=int((time.perf_counter() - start) * 1000),
+                    stream_duration_ms=None, ttft_ms=None,
+                    model=req.model, stream=False,
+                    prompt_chars=pchars, prompt_tok_est=ptok_est,
+                    completion_tokens=0, preview=preview,
+                    full_prompt_dbg=full_prompt_dbg,
+                    error_kind=error_kind,
+                )
+                return HttpResponse(exc.body, status=exc.status_code, content_type="application/json")
+
+            wall = time.perf_counter() - start
+            UPSTREAM_LATENCY_SECONDS.observe(wall)
+            await self._finalize_success_metrics(
+                stream=False, wall_s=wall, ttft_s=wall,
+                stream_s=None, completion_tokens=completion_tokens,
+            )
+
             await self._persist_success_log(
-                request_id=rid,
-                status=502,
-                latency_ms=int((time.perf_counter() - start) * 1000),
-                stream_duration_ms=None,
-                ttft_ms=None,
-                model=req.model,
-                stream=False,
-                prompt_chars=pchars,
-                prompt_tok_est=ptok_est,
-                completion_tokens=0,
-                preview=preview,
-                full_prompt_dbg=full_prompt_dbg,
+                request_id=rid, status=status,
+                latency_ms=int(wall * 1000),
+                stream_duration_ms=None, ttft_ms=int(wall * 1000),
+                model=req.model, stream=False,
+                prompt_chars=pchars, prompt_tok_est=ptok_est,
+                completion_tokens=completion_tokens,
+                preview=preview, full_prompt_dbg=full_prompt_dbg,
                 error_kind=error_kind,
             )
-            return _openai_error(message="Upstream inference unavailable", type_="api_error", status=502)
-        except UpstreamHTTPError as exc:
-            CHAT_COMPLETION_ERRORS.labels(kind="upstream_http").inc()
-            status = exc.status_code
-            error_kind = "upstream_http"
-            UPSTREAM_LATENCY_SECONDS.observe(time.perf_counter() - start)
-            await self._persist_success_log(
-                request_id=rid,
-                status=status,
-                latency_ms=int((time.perf_counter() - start) * 1000),
-                stream_duration_ms=None,
-                ttft_ms=None,
-                model=req.model,
-                stream=False,
-                prompt_chars=pchars,
-                prompt_tok_est=ptok_est,
-                completion_tokens=0,
-                preview=preview,
-                full_prompt_dbg=full_prompt_dbg,
-                error_kind=error_kind,
-            )
-            return HttpResponse(exc.body, status=exc.status_code, content_type="application/json")
 
-        wall = time.perf_counter() - start
-        UPSTREAM_LATENCY_SECONDS.observe(wall)
-        await self._finalize_success_metrics(
-            stream=False,
-            wall_s=wall,
-            ttft_s=wall,
-            stream_s=None,
-            completion_tokens=completion_tokens,
-        )
+            await self._post_success_hooks(ptok_est=ptok_est, completion_tokens=completion_tokens)
 
-        await self._persist_success_log(
-            request_id=rid,
-            status=status,
-            latency_ms=int(wall * 1000),
-            stream_duration_ms=None,
-            ttft_ms=int(wall * 1000),
-            model=req.model,
-            stream=False,
-            prompt_chars=pchars,
-            prompt_tok_est=ptok_est,
-            completion_tokens=completion_tokens,
-            preview=preview,
-            full_prompt_dbg=full_prompt_dbg,
-            error_kind=error_kind,
-        )
+            logger.info("nonstreaming_complete", extra={
+                "request_id": rid, "model": req.model,
+                "status": status, "latency_ms": int(wall * 1000),
+                "prompt_tokens": ptok_est, "completion_tokens": completion_tokens,
+                "stream": False,
+            })
 
-        await self._post_success_hooks(ptok_est=ptok_est, completion_tokens=completion_tokens)
-
-        return HttpResponse(body, content_type="application/json")
+            return HttpResponse(body, content_type="application/json")
+        finally:
+            ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).dec()
 
     async def _stream_sse(
         self,
@@ -291,6 +365,7 @@ class ChatCompletionService:
         counter = _SseTokenCounter()
         status = 200
         error_kind = ""
+        timed_out = False
 
         try:
             async for chunk in backend.stream_chat_completion(req, extra_headers=extra_headers):
@@ -302,6 +377,12 @@ class ChatCompletionService:
             error_kind = "client_disconnected"
             logger.info("stream_cancelled", extra={"request_id": request_id})
             raise
+        except UpstreamTimeoutError:
+            UPSTREAM_TIMEOUTS.inc()
+            CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
+            error_kind = "upstream_timeout"
+            timed_out = True
+            yield _sse_error_chunk("Upstream inference timed out")
         except UpstreamUnavailableError as exc:
             CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
             logger.warning("upstream_unavailable", extra={"error": str(exc)})
@@ -315,23 +396,21 @@ class ChatCompletionService:
             end = time.perf_counter()
             wall = end - start
             STREAMING_IN_FLIGHT.dec()
+            ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).dec()
             UPSTREAM_LATENCY_SECONDS.observe(wall)
             STREAMING_DURATION_SECONDS.observe(wall)
 
             completion_tokens = counter.completion_token_estimate()
             await self._persist_success_log(
-                request_id=request_id,
-                status=status,
+                request_id=request_id, status=status,
                 latency_ms=int(wall * 1000),
                 stream_duration_ms=int(wall * 1000),
                 ttft_ms=int((first - start) * 1000) if first is not None else None,
-                model=req.model,
-                stream=True,
+                model=req.model, stream=True,
                 prompt_chars=prompt_chars,
                 prompt_tok_est=prompt_tok_est,
                 completion_tokens=completion_tokens,
-                preview=preview,
-                full_prompt_dbg=full_prompt_dbg,
+                preview=preview, full_prompt_dbg=full_prompt_dbg,
                 error_kind=error_kind,
             )
             await self._finalize_success_metrics(
@@ -341,8 +420,18 @@ class ChatCompletionService:
                 stream_s=wall,
                 completion_tokens=completion_tokens,
             )
-            if error_kind == "":
+            if error_kind == "" and not timed_out:
                 await self._post_success_hooks(ptok_est=prompt_tok_est, completion_tokens=completion_tokens)
+
+            logger.info("streaming_complete", extra={
+                "request_id": request_id, "model": req.model,
+                "status": status, "latency_ms": int(wall * 1000),
+                "stream_duration_ms": int(wall * 1000),
+                "ttft_ms": int((first - start) * 1000) if first is not None else None,
+                "prompt_tokens": prompt_tok_est,
+                "completion_tokens": completion_tokens,
+                "stream": True, "error_kind": error_kind,
+            })
 
     async def _finalize_success_metrics(
         self,

@@ -14,3 +14,7 @@ class UpstreamHTTPError(InferenceServiceError):
         self.status_code = status_code
         self.body = body
         super().__init__(f"Upstream returned HTTP {status_code}")
+
+
+class UpstreamTimeoutError(InferenceServiceError):
+    """Upstream llama.cpp request exceeded the configured timeout."""

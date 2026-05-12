@@ -1,4 +1,9 @@
-"""HTTP integration with llama.cpp's OpenAI-compatible server (`llama-server`)."""
+"""HTTP integration with llama.cpp's OpenAI-compatible server (`llama-server`).
+
+Explicit timeouts are enforced at the httpx level. Streaming paths use the
+configured read timeout; if llama.cpp stops sending bytes for longer than
+the timeout period the connection is torn down and a 504 is returned.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from typing import Any
 import httpx
 from django.conf import settings
 
-from apps.inference.exceptions import UpstreamHTTPError, UpstreamUnavailableError
+from apps.inference.exceptions import UpstreamHTTPError, UpstreamTimeoutError, UpstreamUnavailableError
 from apps.inference.http_client import get_async_client
 from apps.inference.schemas import ChatCompletionRequest
 
@@ -50,14 +55,18 @@ class LlamaCppBackend:
             logger.warning("upstream_unavailable", extra={"error": str(exc)})
             raise UpstreamUnavailableError(str(exc)) from exc
 
-        async with upstream as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise UpstreamHTTPError(resp.status_code, body)
+        try:
+            async with upstream as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise UpstreamHTTPError(resp.status_code, body)
 
-            async for chunk in resp.aiter_bytes():
-                if chunk:
-                    yield chunk
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.ReadTimeout as exc:
+            logger.warning("upstream_timeout", extra={"error": str(exc), "stream": True})
+            raise UpstreamTimeoutError() from exc
 
     async def chat_completion(
         self,
@@ -78,6 +87,9 @@ class LlamaCppBackend:
                     headers=self._forward_headers(stream=False, extra_headers=extra_headers),
                 )
                 break
+            except httpx.ReadTimeout as exc:
+                logger.warning("upstream_timeout", extra={"error": str(exc), "attempt": attempt})
+                raise UpstreamTimeoutError() from exc
             except httpx.RequestError as exc:
                 logger.warning("upstream_request_error", extra={"error": str(exc), "attempt": attempt})
                 if attempt == 0:

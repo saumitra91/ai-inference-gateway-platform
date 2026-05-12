@@ -265,15 +265,67 @@ Format: `sk_local_{public_id}_{secret_component}` (12 hex + 64 hex = 128-bit + 2
 | `full_prompt` | `TextField(null)` | Only when `DEBUG_LOG_FULL_PROMPTS=true` |
 | `error_kind` | `CharField(64, blank)` | |
 
+## Generation controls
+
+Server-side defaults are applied when the client omits a parameter. If the client
+passes a value exceeding the hard cap, it is **clamped silently**.
+
+| Parameter | Default | Hard cap | Configurable via |
+|---|---|---|---|
+| `max_tokens` | 128 | 512 | `INFERENCE_DEFAULT_MAX_TOKENS`, `INFERENCE_HARD_MAX_TOKENS` |
+| `temperature` | 0.7 | [0.0, 2.0] | `INFERENCE_DEFAULT_TEMPERATURE` |
+| `top_p` | 0.9 | [0.0, 1.0] | `INFERENCE_DEFAULT_TOP_P` |
+
+Clamping is tracked via the `inference_clamped_requests_total` metric with a
+`field` label (`max_tokens`, `temperature`, `top_p`).
+
+## Request validation flow
+
+```mermaid
+flowchart LR
+    A[Raw JSON] --> B{Empty body?}
+    B -->|yes| C[400 empty_body]
+    B -->|no| D{Valid JSON?}
+    D -->|no| E[400 malformed_json]
+    D -->|yes| F{Valid schema?}
+    F -->|no| G[400 validation_error]
+    F -->|yes| H{Prompt too long?}
+    H -->|yes| I[413 prompt_too_long]
+    H -->|no| J[Apply defaults + clamp]
+    J --> K[Rate limit check]
+    K --> L[Quota check]
+    L --> M[Upstream proxy]
+```
+
+Each rejection path records a structured log with `request_id`, `error_kind`,
+and the appropriate `inference_validation_errors_total` or
+`inference_rejected_requests_total` metric.
+
+## Timeout handling
+
+- Upstream requests use the httpx read timeout configured in `http_client.py`
+  (default: 600s, configurable via `INFERENCE_UPSTREAM_TIMEOUT_S`).
+- `httpx.ReadTimeout` is caught and converted to `UpstreamTimeoutError`.
+- Non-streaming: returns HTTP 504 with `{"error": {"message": "Upstream inference timed out", "type": "api_error"}}`.
+- Streaming: yields an SSE error chunk and closes the stream gracefully.
+- Timeouts are counted via `inference_upstream_timeouts_total`.
+
 ## Prometheus metrics inventory
 
 ### Django (`/metrics`)
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
+| `inference_chat_requests_total` | Counter | `mode` | Requests entering handler |
 | `inference_chat_completions_streaming_total` | Counter | — | Streaming requests |
 | `inference_chat_completions_nonstreaming_total` | Counter | — | Non-streaming requests |
+| `inference_active_requests` | Gauge | `mode` | Currently active requests (in-flight) |
+| `inference_validation_errors_total` | Counter | `kind` | Validation failures by type |
+| `inference_rejected_requests_total` | Counter | `reason` | Rejected by policy (e.g. prompt_too_long) |
+| `inference_clamped_requests_total` | Counter | `field` | Parameters clamped to server limits |
+| `inference_max_tokens_requested` | Histogram | — | Distribution of requested max_tokens |
 | `inference_chat_completions_errors_total` | Counter | `kind` | Error count by type |
+| `inference_upstream_timeouts_total` | Counter | — | Upstream timeout count |
 | `inference_upstream_wall_seconds` | Histogram | — | Wall time waiting on llama.cpp |
 | `inference_streaming_requests_in_flight` | Gauge | — | Active streaming sessions |
 | `inference_rate_limit_exceeded_total` | Counter | — | RPM limit hits |
@@ -281,7 +333,6 @@ Format: `sk_local_{public_id}_{secret_component}` (12 hex + 64 hex = 128-bit + 2
 | `inference_time_to_first_token_seconds` | Histogram | — | TTFT (streaming) or full response (non-streaming) |
 | `inference_streaming_duration_seconds` | Histogram | — | Streaming session wall clock |
 | `inference_tokens_total` | Counter | `kind` | Estimated completion tokens |
-| `inference_chat_requests_total` | Counter | `mode` | Requests entering handler |
 | `django_process_uptime_seconds` | Gauge | — | Process uptime |
 | `django_process_resident_memory_bytes` | Gauge | — | RSS (via psutil) |
 | `django_process_cpu_percent` | Gauge | — | CPU% (via psutil) |
@@ -350,3 +401,7 @@ Format: `sk_local_{public_id}_{secret_component}` (12 hex + 64 hex = 128-bit + 2
 6. **Redis optional locally** (`USE_REDIS=false`) — single-process dev works without Docker; production uses Redis
 7. **Prometheus in-process** — lowest friction for startup-internal platforms; `/metrics` as standard pattern
 8. **Static files via startup collectstatic** — bind-mounted host code means `collectstatic` runs at container start, not build time
+9. **Clamp, don't reject** — generation parameters are clamped server-side rather than rejected, so slightly-over-limit requests still succeed. Hard policy limits (prompt size) still return 413.
+10. **Early prompt validation** — prompt size is checked before defaults are applied, rate limits checked, or upstream calls made. This avoids wasting work on requests that will be rejected.
+11. **Structured error taxonomy** — each rejection has a unique `error_kind` string that maps 1:1 to a metric label, enabling precise error rate dashboards without high-cardinality labels.
+12. **Timeout as distinct error class** — `UpstreamTimeoutError` is separate from `UpstreamUnavailableError` so timeouts can be tracked independently. This matters for debug: timeouts suggest tuning timeout settings or model speed, while unavailability suggests infrastructure issues.
