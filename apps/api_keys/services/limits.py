@@ -6,6 +6,8 @@ from datetime import timedelta
 
 from django.contrib.auth.models import AbstractBaseUser
 from django.core.cache import cache
+from datetime import timezone as dt_timezone
+
 from django.utils import timezone
 
 from apps.users.models import UserProfile
@@ -38,11 +40,11 @@ def consume_rate_limit(*, api_key: APIKey) -> RateLimitResult:
 
 
 def _utc_day_key(now: timezone.datetime) -> str:
-    return now.astimezone(timezone.utc).date().isoformat()
+    return now.astimezone(dt_timezone.utc).date().isoformat()
 
 
 def _seconds_until_next_utc_day(now: timezone.datetime) -> int:
-    utc_now = now.astimezone(timezone.utc)
+    utc_now = now.astimezone(dt_timezone.utc)
     nxt = (utc_now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return max(60, int((nxt - utc_now).total_seconds()))
 

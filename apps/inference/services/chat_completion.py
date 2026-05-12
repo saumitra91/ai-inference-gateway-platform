@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AbstractBaseUser
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from pydantic import ValidationError
@@ -116,7 +117,7 @@ class ChatCompletionService:
         CHAT_REQUESTS.labels(mode=self.mode).inc()
 
         if self.api_key is not None:
-            rl = consume_rate_limit(api_key=self.api_key)
+            rl = await sync_to_async(consume_rate_limit)(api_key=self.api_key)
             if not rl.allowed:
                 RATE_LIMIT_EXCEEDED.inc()
                 await self._log_failure(
@@ -135,7 +136,7 @@ class ChatCompletionService:
                 return _openai_error(message="Rate limit exceeded", type_="rate_limit_error", status=429)
 
         pessimistic_completion_budget = max(256, ptok_est)
-        quota = check_user_daily_quota(
+        quota = await sync_to_async(check_user_daily_quota)(
             user=self.actor_user,
             prompt_tokens=ptok_est,
             completion_tokens=pessimistic_completion_budget,
@@ -359,7 +360,7 @@ class ChatCompletionService:
             TTFT_SECONDS.observe(ttft_s)
 
     async def _post_success_hooks(self, *, ptok_est: int, completion_tokens: int) -> None:
-        record_user_quota_success(
+        await sync_to_async(record_user_quota_success)(
             user=self.actor_user,
             prompt_tokens=ptok_est,
             completion_tokens=completion_tokens,

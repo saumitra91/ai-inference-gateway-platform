@@ -46,8 +46,6 @@ services:
       - ./models:/models:ro
     expose:
       - "8080"
-    ports:
-      - "8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
       interval: 30s
@@ -80,7 +78,7 @@ services:
     expose:
       - "8081"
     ports:
-      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:18081:8081"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8081/health"]
       interval: 15s
@@ -102,8 +100,10 @@ services:
       USE_REDIS: "true"
       LLAMA_CPP_BASE_URL: http://llamacpp:8080
       READINESS_INCLUDE_LLAMA: "true"
+      CSRF_TRUSTED_ORIGINS: http://localhost:8888,http://127.0.0.1:8888
     command: >
-      sh -c "python manage.py migrate --noinput &&
+      sh -c "python manage.py collectstatic --noinput &&
+             python manage.py migrate --noinput &&
              uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --workers 1"
     volumes:
       - .:/app:rw
