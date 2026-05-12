@@ -113,3 +113,38 @@ QUOTA_EXCEEDED = Counter(
     "inference_quota_exceeded_total",
     "API requests rejected due to per-user daily quotas",
 )
+
+# ── Batching ─────────────────────────────────────────────────────
+
+BATCH_DISPATCH_COUNT = Counter(
+    "inference_batch_dispatches_total",
+    "Number of batch dispatch events (regardless of batch size)",
+)
+
+BATCH_SINGLE_COUNT = Counter(
+    "inference_batch_single_dispatches_total",
+    "Batches that contained only one request (no batching benefit)",
+)
+
+BATCH_SIZE = Histogram(
+    "inference_batch_size",
+    "Number of requests per dispatched batch",
+    buckets=(1, 2, 4, 8, 16, 32),
+)
+
+BATCH_WAIT_SECONDS = Histogram(
+    "inference_batch_wait_seconds",
+    "Time requests spend waiting inside the batch barrier before upstream dispatch",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+BATCH_QUEUE_DEPTH = Gauge(
+    "inference_batch_queue_depth",
+    "Number of requests currently waiting in the batch barrier",
+)
+
+BATCH_EFFICIENCY = Gauge(
+    "inference_batch_efficiency",
+    "Batching efficiency ratio: (batched_requests - batch_count) / batched_requests. "
+    "0 = all single-request batches, approaches 1 as batches grow.",
+)

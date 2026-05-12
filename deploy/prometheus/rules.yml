@@ -61,6 +61,18 @@ groups:
       - record: inference:streaming_in_flight:1m
         expr: inference_streaming_requests_in_flight
 
+      # ── Batching ──────────────────────────────────────────────
+      - record: inference:batch_size_avg:5m
+        expr: rate(inference_batch_size_sum[5m]) / (rate(inference_batch_size_count[5m]) + 1)
+      - record: inference:batch_wait_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(inference_batch_wait_seconds_bucket[5m])) by (le))
+      - record: inference:batch_wait_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(inference_batch_wait_seconds_bucket[5m])) by (le))
+      - record: inference:batch_efficiency:5m
+        expr: inference_batch_efficiency
+      - record: inference:batch_single_ratio:5m
+        expr: rate(inference_batch_single_dispatches_total[5m]) / (rate(inference_batch_dispatches_total[5m]) + 1)
+
       # ── Process health ────────────────────────────────────────
       - record: inference:gateway_memory_gb:1m
         expr: gateway_process_resident_memory_bytes / 1073741824

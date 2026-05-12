@@ -41,7 +41,12 @@ services:
       HOST: "0.0.0.0"
       PORT: "8080"
       # EXTRA_ARGS: space-separated additional flags, e.g. "--no-mmap --flash-attn"
-      EXTRA_ARGS: ""
+      # --parallel: llama.cpp parallel slots.  Must match inference_max_concurrency.
+      #   Each slot consumes ~450 MB KV cache per 4096 ctx (3B model).
+      #   8 slots × 450 MB = 3.6 GB — fine on a 16 GB machine with a 2 GB model.
+      # --batch-size / --ubatch-size: prompt-token batch for the prefill phase
+      #   Larger = faster prompt processing for concurrent requests
+      EXTRA_ARGS: "--parallel 8 --batch-size 1024 --ubatch-size 512"
     volumes:
       - ./models:/models:ro
     expose:
@@ -52,7 +57,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
-    mem_limit: 48g
+    mem_limit: 12g
     restart: unless-stopped
 
   gateway:
@@ -70,6 +75,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
       GATEWAY_PERSIST_LOGS: "true"
+      INFERENCE_MAX_CONCURRENCY: "8"
     depends_on:
       postgres:
         condition: service_healthy

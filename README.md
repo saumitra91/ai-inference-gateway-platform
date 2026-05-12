@@ -7,8 +7,9 @@ backpressure, comprehensive observability, and OpenAI-compatible streaming APIs.
 Client → nginx :8888 → FastAPI Gateway :8081 → llama.cpp :8080 → GGUF Model
                            ↓                          ↑
                      Concurrency Queue          SSE token stream
-                     Rate Limiter (Redis)       data: {...}
-                     API Key Auth (Postgres)    data: [DONE]
+                     Request Batcher             data: {...}
+                     Rate Limiter (Redis)       data: [DONE]
+                     API Key Auth (Postgres)
                      Prometheus /metrics
 ```
 
@@ -23,6 +24,7 @@ Client → nginx :8888 → FastAPI Gateway :8081 → llama.cpp :8080 → GGUF Mo
 │  L2  API LAYER              nginx :8888 │ FastAPI Gateway :8081      │
 │                             ┌──────────────────────────────────┐    │
 │                             │  Concurrency Queue                │    │
+│                             │  Request Batcher (50ms window)    │    │
 │                             │  Rate Limiter (Redis)             │    │
 │                             │  API Key Auth (Postgres)          │    │
 │                             │  Structured Logging               │    │
@@ -85,11 +87,13 @@ flowchart LR
 3. **Gateway** verifies Bearer API key (HMAC-SHA256, Postgres lookup, timing-safe compare)
 4. **Gateway** checks rate limit (Redis `incr` 60s sliding window, fail-open on Redis outage)
 5. **Gateway** acquires concurrency slot (`asyncio.Semaphore(4)`, queue depth 10, 30s timeout)
-6. **Gateway** proxies to `llama.cpp :8080` — httpx streaming `aiter_bytes()`
-7. **llama.cpp** streams SSE tokens back through the gateway
-8. **Gateway** records metrics (TTFT, stream duration, token count, queue wait time)
-9. **Gateway** persists audit log to Postgres (async `create_task`, 100-char redacted preview)
-10. **Client** receives SSE chunks terminated by `data: [DONE]`
+6. **Gateway** enters batch barrier — waits for other concurrent requests (default 50ms window, max 8 per batch)
+7. **Batch dispatches** — all accumulated requests are released simultaneously
+8. **Gateway** proxies to `llama.cpp :8080` — httpx streaming `aiter_bytes()` (concurrent with batch peers)
+9. **llama.cpp** streams SSE tokens back through the gateway (server-side slot batching improves prompt processing)
+10. **Gateway** records metrics (TTFT, stream duration, token count, queue wait time, batch wait time)
+11. **Gateway** persists audit log to Postgres (async `create_task`, 100-char redacted preview)
+12. **Client** receives SSE chunks terminated by `data: [DONE]`
 
 ### Key design decisions
 
@@ -101,6 +105,9 @@ flowchart LR
 | **Fail-open on Redis outage** | Availability over strict rate enforcement; rate limiting is operational protection, not security |
 | **Prometheus in-process** | Lowest friction for internal platform; `/metrics` is standard pattern |
 | **Queue tracking via plain int** | Atomic between `await` points in asyncio cooperative multitasking — no lock needed |
+| **Dispatch-time batching (not request fusion)** | Requests are held briefly then released simultaneously, letting llama.cpp batch prompt processing internally. No HTTP body merging needed — preserves per-request streaming and OpenAI compatibility |
+| **Batching after concurrency slot acquisition** | Slots are held during batching wait, maintaining proper backpressure. Without this, the batch could grow unbounded while the upstream is saturated |
+| **Small default window (50ms)** | Balances TTFT increase against batching opportunity. Under light load, 50ms penalty is negligible. Under heavy load, multiple requests accumulate within the window |
 
 ---
 
@@ -113,6 +120,13 @@ flowchart LR
 - API key authentication — HMAC-SHA256 with timing-safe comparison
 - Format: `sk_local_{public_id}_{secret}` (128-bit + 256-bit entropy)
 
+### Request Batching
+- **Dispatch-time batching** — concurrent requests arriving within a configurable window (default 50ms) are released simultaneously to llama.cpp
+- **Configurable max batch size** (default 8) — limits worst-case batch wait
+- **No HTTP body merging** — preserves per-request streaming and OpenAI compatibility
+- **Safe fallback** — single requests flush after the window timeout with no starvation risk
+- **Algorithm**: `asyncio.Event`-based barrier with generation counter to prevent stale timer flushes
+
 ### Concurrency Control
 - `asyncio.Semaphore`-based slot limiting (configurable: `inference_max_concurrency`)
 - Request queue with depth tracking (configurable: `inference_queue_size`)
@@ -120,7 +134,7 @@ flowchart LR
 - Overload rejection — 503 when queue is full
 - Queue saturation monitoring via Prometheus gauge
 
-### Observability (19 Prometheus metrics)
+### Observability (25 Prometheus metrics)
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `inference_chat_requests_total` | Counter | `mode` | Request count |
@@ -138,15 +152,22 @@ flowchart LR
 | `gateway_process_uptime_seconds` | Gauge | — | Process uptime |
 | `gateway_process_resident_memory_bytes` | Gauge | — | RSS |
 | `gateway_process_cpu_percent` | Gauge | — | CPU % |
+| `inference_batch_dispatches_total` | Counter | — | Batch dispatch count |
+| `inference_batch_single_dispatches_total` | Counter | — | Single-request batch count |
+| `inference_batch_size` | Histogram | — | Requests per batch |
+| `inference_batch_wait_seconds` | Histogram | — | Time in batch barrier |
+| `inference_batch_queue_depth` | Gauge | — | Current barrier queue |
+| `inference_batch_efficiency` | Gauge | — | Cumulative batching efficiency |
 
-### Grafana Dashboard (23 panels)
+### Grafana Dashboard (29 panels)
 - **Stat row**: Active Requests, Queue Depth, Overload Rejections, Request Rate, Error Rate, Upstream Timeouts
 - **Latency**: Upstream Latency p50/p95/p99, TTFT p50/p95/p99, Queue Wait p50/p95/p99, Streaming Duration p50/p95/p99
 - **Throughput**: Token Throughput, Request Rate by Mode, Streams In-Flight
 - **Health**: Error Rate by Kind, Validation & Rejection Rate, Rate Limit & Quota Hits, Django Process Health, Gateway Process Health, Overload & Timeout Rate
 - **Heatmap**: TTFT distribution over time
+- **Batching row**: Batch Queue Depth, Batch Efficiency, Avg Batch Size, Batch Dispatch Rate, Batch Size Over Time, Batch Wait Time p50/p95
 
-### Prometheus Recording Rules (18 rules)
+### Prometheus Recording Rules (30 rules)
 - `inference:request_rate:5m`, `inference:error_rate:5m`, `inference:error_ratio:5m`
 - `inference:upstream_latency_p50/p95/p99:5m`
 - `inference:ttft_p50/p95/p99:5m`
@@ -154,6 +175,8 @@ flowchart LR
 - `inference:token_throughput:1m`, `inference:token_throughput:5m`
 - `inference:queue_saturation:1m`, `inference:active_requests:1m`
 - `inference:gateway_memory_gb:1m`, `inference:gateway_cpu:1m`
+- `inference:batch_size_avg:5m`, `inference:batch_efficiency:5m`, `inference:batch_single_ratio:5m`
+- `inference:batch_wait_p50/p95:5m`
 
 ### Resilience
 - Graceful shutdown with 60s connection drain (`--timeout-graceful-shutdown`)
@@ -250,13 +273,15 @@ curl -X POST http://localhost:8888/v1/chat/completions \
 
 ## k6 Load Testing
 
-Seven scripts in `loadtest/`:
+Nine scripts in `loadtest/`:
 
 | Script | Description | VUs | Duration |
 |---|---|---|---|
 | `chat-streaming.js` | Streaming completions with TTFT tracking | 5 | 3m |
 | `chat-nonstreaming.js` | Non-streaming completions with usage validation | 10 | 3m |
 | `chat-mixed.js` | Concurrent streaming + non-streaming scenarios | 4+6 | 3m |
+| `chat-batch.js` | Constant-arrival-rate streaming — exercises batch barrier | 10 | 3m |
+| `chat-step-stress.js` | Step stress test: 2→14 VUs in 1m steps — finds saturation knee | 14 | 7.5m |
 | `chat-cancellation.js` | Client disconnect simulation + liveness check | 5 | ~50s |
 | `chat-timeout.js` | Upstream timeout simulation + recovery check | 3 | ~50s |
 | `spike-test.js` | Sudden burst (0→20→0 VUs) — tests backpressure | 20 | 2m |
@@ -276,10 +301,26 @@ Gateway settings (`deploy/gateway/gateway/config.py`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `inference_max_concurrency` | 4 | Max simultaneous llama.cpp calls |
+| `inference_max_concurrency` | 4 | Max simultaneous llama.cpp calls. Must NOT exceed llama.cpp `--parallel` |
 | `inference_queue_size` | 10 | Max queued requests before 503 |
 | `inference_queue_timeout_s` | 30.0 | Queue wait timeout before 503 |
+| `batch_window_ms` | 50.0 | Time window for aggregating requests into a batch (ms) |
+| `batch_max_size` | 8 | Maximum requests per batch |
 | `gateway_persist_logs` | True | Persist request logs to Postgres |
+
+### llama.cpp parallel slots
+
+The gateway's `inference_max_concurrency` must match llama.cpp's `--parallel` slots:
+
+| Gateway config | llama.cpp `EXTRA_ARGS` | Behavior |
+|---|---|---|
+| `inference_max_concurrency=4` | `--parallel 4` | 4 concurrent requests processed simultaneously with prompt batching ✓ |
+| `inference_max_concurrency=4` | `--parallel 1` (default) | 1 processed, 3 queue inside llama.cpp — **queue wait spikes** ✗ |
+
+Set in `docker-compose.yml`:
+```yaml
+EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512"
+```
 
 ---
 
@@ -291,18 +332,19 @@ deploy/
 │   └── gateway/
 │       ├── main.py       # Streaming + non-streaming handlers
 │       ├── concurrency.py # Semaphore + queue with backpressure
-│       ├── metrics.py    # 19 Prometheus metric families
+│       ├── batcher.py    # Request batch barrier (dispatch-time coordination)
+│       ├── metrics.py    # 25 Prometheus metric families
 │       ├── limits.py     # Redis rate limiter (fail-open)
 │       ├── crypto_auth.py # HMAC-SHA256 API key auth
 │       ├── runtime_metrics.py # Process RSS, CPU%, uptime
 │       └── config.py     # Pydantic settings
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape config (django + gateway)
-│   └── rules.yml         # 18 recording rules
+│   └── rules.yml         # 22 recording rules
 ├── grafana/
 │   └── provisioning/
 │       └── dashboards/
-│           └── inference-dashboard.json  # 23 panels
+│           └── inference-dashboard.json  # 29 panels
 ├── nginx/
 │   └── default.conf      # Route /v1/ to gateway, / to Django
 └── llamacpp/             # Multi-arch llama.cpp Docker build
@@ -321,8 +363,8 @@ docs/
 
 | Category | Status | Notes |
 |---|---|---|
-| Observability | 9/10 | 19 metrics, 23 Grafana panels, structured JSON logging, p50/p95/p99 latency |
-| Concurrency | 8/10 | Semaphore + queue, proper 503, queue saturation tracking. Multi-worker needs Redis semaphore |
+| Observability | 9/10 | 25 metrics, 29 Grafana panels, structured JSON logging, p50/p95/p99 latency, batching metrics |
+| Concurrency | 9/10 | Semaphore + queue, proper 503, queue saturation tracking, request batching (50ms window). Multi-worker needs Redis semaphore |
 | Streaming | 8/10 | SSE, CancelledError handling, timeout/unavailable errors, `[DONE]` sentinel |
 | Resilience | 7/10 | Redis fail-open, graceful shutdown, restart policies. Missing: circuit breaker |
 | Security | 8/10 | HMAC-SHA256, timing-safe compare, Bearer auth, CSRF for UI, rate limiting |

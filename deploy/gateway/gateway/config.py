@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     inference_queue_size: int = 10
     inference_queue_timeout_s: float = 30.0
 
+    batch_window_ms: float = 50.0
+    batch_max_size: int = 8
+
     def dsn_asyncpg(self) -> str:
         u = self.database_url
         if u.startswith("postgres://"):

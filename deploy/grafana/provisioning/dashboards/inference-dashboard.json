@@ -1314,6 +1314,301 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 24,
+      "title": "Batch Queue Depth",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Requests currently waiting in the batch barrier. Non-zero means batching is active.",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 4 },
+              { "color": "red", "value": 8 }
+            ]
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "inference_batch_queue_depth",
+          "legendFormat": "Depth",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "Batch Efficiency",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Cumulative batching efficiency. 0 = all single-request batches, approaches 1 as batches grow.",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.3 },
+              { "color": "green", "value": 0.7 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "inference_batch_efficiency",
+          "legendFormat": "Efficiency",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "Avg Batch Size",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Average number of requests per batch (5m rolling). Higher is better for throughput.",
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 2 },
+              { "color": "green", "value": 4 }
+            ]
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(inference_batch_size_sum[$__rate_interval]) / (rate(inference_batch_size_count[$__rate_interval]) + 1)",
+          "legendFormat": "Avg Size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Batch Dispatch Rate",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Rate of batch dispatches per second. Single-request batches show batching overhead.",
+      "options": {
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(inference_batch_dispatches_total[$__rate_interval])",
+          "legendFormat": "Batches/s",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(inference_batch_single_dispatches_total[$__rate_interval])",
+          "legendFormat": "Singles/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "title": "Batch Size Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Batch size distribution over time from the batch_size histogram.",
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean", "last"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "showPoints": "never",
+            "lineInterpolation": "smooth",
+            "spanNulls": false,
+            "fillOpacity": 20,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Avg Batch Size" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(inference_batch_size_sum[$__rate_interval]) / (rate(inference_batch_size_count[$__rate_interval]) + 1)",
+          "legendFormat": "Avg Batch Size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "title": "Batch Wait Time p50 / p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Time requests spend waiting in the batch barrier before upstream dispatch.",
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean", "last"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "showPoints": "never",
+            "lineInterpolation": "smooth",
+            "spanNulls": false,
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum(rate(inference_batch_wait_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum(rate(inference_batch_wait_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        }
+      ]
     }
   ]
 }

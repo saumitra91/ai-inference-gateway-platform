@@ -76,7 +76,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Startup context log
 # ---------------------------------------------------------------------------
-log "msg=starting model_path=${MODEL_PATH} context_size=${CONTEXT_SIZE} num_threads=${NUM_THREADS} host=${HOST} port=${PORT}"
+log "msg=starting model_path=${MODEL_PATH} context_size=${CONTEXT_SIZE} num_threads=${NUM_THREADS} host=${HOST} port=${PORT} extra_args=${EXTRA_ARGS}"
 
 # ---------------------------------------------------------------------------
 # 4. exec (not sh -c) so llama-server is PID 1

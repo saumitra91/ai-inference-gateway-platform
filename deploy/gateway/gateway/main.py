@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from redis.asyncio import Redis
 from redis.asyncio import from_url as redis_from_url
 
+from gateway.batcher import BatchBarrier
 from gateway.concurrency import acquire_slot as acquire_concurrency_slot
 from gateway.concurrency import release_slot as release_concurrency_slot
 from gateway.config import Settings
@@ -25,6 +26,12 @@ from gateway.limits import consume_rate_limit
 from gateway.runtime_metrics import collect_runtime_metrics
 from gateway.metrics import (
     ACTIVE_INFERENCE_REQUESTS,
+    BATCH_DISPATCH_COUNT,
+    BATCH_EFFICIENCY,
+    BATCH_QUEUE_DEPTH,
+    BATCH_SIZE,
+    BATCH_SINGLE_COUNT,
+    BATCH_WAIT_SECONDS,
     CHAT_COMPLETIONS_NONSTREAMING,
     CHAT_COMPLETIONS_STREAMING,
     CHAT_COMPLETION_ERRORS,
@@ -65,9 +72,30 @@ class _State:
     pool: asyncpg.Pool
     redis: Redis
     http: httpx.AsyncClient
+    batcher: BatchBarrier
 
 
 state = _State()
+
+_BATCH_TOTAL_REQS: int = 0
+_BATCH_TOTAL_DISPATCHES: int = 0
+
+
+def _on_batch_flush(batch_size: int, wait_times: list[float]) -> None:
+    """Callback invoked by BatchBarrier after each flush. Records metrics."""
+    global _BATCH_TOTAL_REQS, _BATCH_TOTAL_DISPATCHES
+    BATCH_DISPATCH_COUNT.inc()
+    if batch_size == 1:
+        BATCH_SINGLE_COUNT.inc()
+    BATCH_SIZE.observe(batch_size)
+    for wt in wait_times:
+        BATCH_WAIT_SECONDS.observe(wt)
+
+    _BATCH_TOTAL_REQS += batch_size
+    _BATCH_TOTAL_DISPATCHES += 1
+    if _BATCH_TOTAL_REQS > 0:
+        efficiency = max(0.0, (_BATCH_TOTAL_REQS - _BATCH_TOTAL_DISPATCHES) / _BATCH_TOTAL_REQS)
+        BATCH_EFFICIENCY.set(efficiency)
 
 
 @asynccontextmanager
@@ -76,7 +104,18 @@ async def lifespan(app: FastAPI):
     state.pool = await asyncpg.create_pool(settings.dsn_asyncpg(), min_size=1, max_size=10)
     state.redis = redis_from_url(settings.redis_url, decode_responses=False)
     state.http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=600.0, write=60.0, pool=5.0))
+    state.batcher = BatchBarrier(
+        window_ms=settings.batch_window_ms,
+        max_batch_size=settings.batch_max_size,
+        on_flush=_on_batch_flush,
+        queue_depth_gauge=BATCH_QUEUE_DEPTH,
+    )
     log.info("level=info event=gateway_startup upstream=%s", settings.upstream_llama_url)
+    log.info(
+        "level=info event=batch_config window_ms=%s max_batch_size=%s",
+        settings.batch_window_ms,
+        settings.batch_max_size,
+    )
     yield
     await state.http.aclose()
     await state.redis.close()
@@ -289,6 +328,9 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
         log.warning("level=warn event=concurrency_rejected request_id=%s", rid)
         raise HTTPException(status_code=503, detail="Server is at capacity, try again later")
 
+    # ── Batch barrier (coordinate dispatch timing) ─────────────────────
+    batch_wait = await state.batcher.wait()
+
     url = f"{settings.upstream_llama_url.rstrip('/')}/v1/chat/completions"
     headers = _upstream_headers(request)
 
@@ -357,10 +399,11 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                     ttft_ms = int((ttft - t0) * 1000) if ttft else None
                     est_tps = (total_bytes / max(elapsed, 1e-9)) / 4.0
                     queue_wait_ms = int(wait_time * 1000) if wait_time else 0
+                    batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
                     log.info(
                         "level=info event=request_complete request_id=%s route=chat stream=true "
                         "latency_ms=%d stream_duration_ms=%d ttft_ms=%s bytes=%d est_tokens_per_sec=%.2f "
-                        "queue_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
+                        "queue_wait_ms=%d batch_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
                         rid,
                         int(elapsed * 1000),
                         int(elapsed * 1000),
@@ -368,6 +411,7 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                         total_bytes,
                         est_tps,
                         queue_wait_ms,
+                        batch_wait_ms,
                         str(ctx.id),
                         status,
                         err,
@@ -455,13 +499,15 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             STREAM_TOKENS.labels(kind="completion").inc(ctok_final)
         tps = (len(out) / max(elapsed, 1e-9)) / 200.0
         queue_wait_ms = int(wait_time * 1000) if wait_time else 0
+        batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
         log.info(
             "level=info event=request_complete request_id=%s route=chat stream=false "
-            "latency_ms=%d est_tokens_per_sec=%.2f queue_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
+            "latency_ms=%d est_tokens_per_sec=%.2f queue_wait_ms=%d batch_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
             rid,
             int(elapsed * 1000),
             tps,
             queue_wait_ms,
+            batch_wait_ms,
             str(ctx.id),
             status,
             err,
