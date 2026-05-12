@@ -1,10 +1,6 @@
-"""Prometheus metrics for the inference control plane (not llama.cpp internal timings)."""
-
 from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
-
-# ── Request lifecycle ──────────────────────────────────────────
 
 CHAT_REQUESTS = Counter(
     "inference_chat_requests_total",
@@ -28,8 +24,6 @@ ACTIVE_INFERENCE_REQUESTS = Gauge(
     labelnames=("mode",),
 )
 
-# ── Validation & rejection ────────────────────────────────────
-
 VALIDATION_ERRORS = Counter(
     "inference_validation_errors_total",
     "Request validation failures",
@@ -38,11 +32,9 @@ VALIDATION_ERRORS = Counter(
 
 REJECTED_REQUESTS = Counter(
     "inference_rejected_requests_total",
-    "Requests rejected by policy (prompt too long, etc.)",
+    "Requests rejected by policy",
     labelnames=("reason",),
 )
-
-# ── Generation controls ───────────────────────────────────────
 
 MAX_TOKENS_REQUESTED = Histogram(
     "inference_max_tokens_requested",
@@ -55,8 +47,6 @@ CLAMPED_REQUESTS = Counter(
     "Requests where a parameter was clamped to a server limit",
     labelnames=("field",),
 )
-
-# ── Concurrency / backpressure ───────────────────────────────
 
 QUEUE_DEPTH = Gauge(
     "inference_queue_depth",
@@ -74,8 +64,6 @@ REJECTED_OVERLOAD = Counter(
     "Requests rejected because the concurrency queue was full",
 )
 
-# ── Errors & timeouts ─────────────────────────────────────────
-
 CHAT_COMPLETION_ERRORS = Counter(
     "inference_chat_completions_errors_total",
     "Chat completion handler errors",
@@ -86,8 +74,6 @@ UPSTREAM_TIMEOUTS = Counter(
     "inference_upstream_timeouts_total",
     "Upstream llama.cpp requests that exceeded the configured timeout",
 )
-
-# ── Upstream performance ──────────────────────────────────────
 
 UPSTREAM_LATENCY_SECONDS = Histogram(
     "inference_upstream_wall_seconds",
@@ -112,15 +98,11 @@ STREAMING_IN_FLIGHT = Gauge(
     "Currently active streaming upstream sessions",
 )
 
-# ── Token accounting ──────────────────────────────────────────
-
 STREAM_TOKENS = Counter(
     "inference_tokens_total",
     "Estimated or reported tokens attributed to completions",
     labelnames=("kind",),
 )
-
-# ── Rate limits & quotas ──────────────────────────────────────
 
 RATE_LIMIT_EXCEEDED = Counter(
     "inference_rate_limit_exceeded_total",

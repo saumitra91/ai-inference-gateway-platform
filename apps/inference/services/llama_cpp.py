@@ -61,9 +61,14 @@ class LlamaCppBackend:
                     body = await resp.aread()
                     raise UpstreamHTTPError(resp.status_code, body)
 
-                async for chunk in resp.aiter_bytes():
-                    if chunk:
-                        yield chunk
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            yield chunk
+                except asyncio.CancelledError:
+                    logger.info("upstream_cancelled", extra={"stream": True})
+                    await resp.aclose()
+                    raise
         except httpx.ReadTimeout as exc:
             logger.warning("upstream_timeout", extra={"error": str(exc), "stream": True})
             raise UpstreamTimeoutError() from exc

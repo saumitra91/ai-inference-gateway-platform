@@ -16,8 +16,16 @@ from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpRe
 from pydantic import ValidationError
 
 from apps.api_keys.models import APIKey
-from apps.api_keys.services.limits import check_user_daily_quota, consume_rate_limit, record_user_quota_success
-from apps.inference.exceptions import UpstreamHTTPError, UpstreamTimeoutError, UpstreamUnavailableError
+from apps.api_keys.services.limits import (
+    check_user_daily_quota,
+    consume_rate_limit,
+    record_user_quota_success,
+)
+from apps.inference.exceptions import (
+    UpstreamHTTPError,
+    UpstreamTimeoutError,
+    UpstreamUnavailableError,
+)
 from apps.inference.metrics import (
     ACTIVE_INFERENCE_REQUESTS,
     CHAT_COMPLETION_ERRORS,
@@ -28,16 +36,19 @@ from apps.inference.metrics import (
     MAX_TOKENS_REQUESTED,
     QUOTA_EXCEEDED,
     RATE_LIMIT_EXCEEDED,
+    REJECTED_OVERLOAD,
     REJECTED_REQUESTS,
+    STREAM_TOKENS,
     STREAMING_DURATION_SECONDS,
     STREAMING_IN_FLIGHT,
-    STREAM_TOKENS,
     TTFT_SECONDS,
     UPSTREAM_LATENCY_SECONDS,
     UPSTREAM_TIMEOUTS,
     VALIDATION_ERRORS,
 )
 from apps.inference.schemas import ChatCompletionRequest
+from apps.inference.services.concurrency import acquire as acquire_slot
+from apps.inference.services.concurrency import release as release_slot
 from apps.inference.services.llama_cpp import LlamaCppBackend
 from apps.inference.services.prompt_stats import prompt_char_length, rough_token_estimate_from_chars
 from apps.inference.services.request_log import (
@@ -199,38 +210,65 @@ class ChatCompletionService:
             )
             return _openai_error(message="Quota exceeded", type_="rate_limit_error", status=429)
 
-        # ── 7. Upstream setup ──────────────────────────────────────────
-        backend = LlamaCppBackend()
-        extra_headers: dict[str, str] = {}
-        if rid and rid != "-":
-            extra_headers["X-Request-ID"] = rid
-
-        ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).inc()
-
-        if req.stream:
-            CHAT_COMPLETIONS_STREAMING.inc()
-            return StreamingHttpResponse(
-                self._stream_sse(
-                    backend=backend,
-                    req=req,
-                    request_id=rid,
-                    extra_headers=extra_headers,
-                    prompt_chars=pchars,
-                    prompt_tok_est=ptok_est,
-                    preview=preview,
-                    full_prompt_dbg=full_prompt_dbg,
-                ),
-                content_type="text/event-stream; charset=utf-8",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        # ── 7. Concurrency slot ────────────────────────────────────────
+        _acquired = False
+        wait_time = await acquire_slot(request_id=rid)
+        if wait_time is None:
+            REJECTED_OVERLOAD.inc()
+            await self._log_failure(
+                request_id=rid, status=503, latency_ms=0,
+                stream=False, model=model_name,
+                prompt_chars=pchars, prompt_tok_est=ptok_est,
+                completion_tok=0, preview=preview,
+                full_prompt=full_prompt_dbg,
+                error_kind="overloaded",
             )
+            return _openai_error(
+                message="Server is at capacity, try again later",
+                type_="overload_error", status=503,
+            )
+        _acquired = True
 
-        CHAT_COMPLETIONS_NONSTREAMING.inc()
-        return await self._handle_nonstreaming(
-            backend=backend, req=req, rid=rid,
-            extra_headers=extra_headers,
-            pchars=pchars, ptok_est=ptok_est,
-            preview=preview, full_prompt_dbg=full_prompt_dbg,
-        )
+        # ── 8. Upstream setup ──────────────────────────────────────────
+        try:
+            backend = LlamaCppBackend()
+            extra_headers: dict[str, str] = {}
+            if rid and rid != "-":
+                extra_headers["X-Request-ID"] = rid
+
+            ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).inc()
+
+            if req.stream:
+                CHAT_COMPLETIONS_STREAMING.inc()
+                _acquired = False  # _stream_sse owns release
+                return StreamingHttpResponse(
+                    self._stream_sse(
+                        backend=backend,
+                        req=req,
+                        request_id=rid,
+                        extra_headers=extra_headers,
+                        prompt_chars=pchars,
+                        prompt_tok_est=ptok_est,
+                        preview=preview,
+                        full_prompt_dbg=full_prompt_dbg,
+                        wait_time=wait_time,
+                    ),
+                    content_type="text/event-stream; charset=utf-8",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+
+            CHAT_COMPLETIONS_NONSTREAMING.inc()
+            _acquired = False  # _handle_nonstreaming owns release
+            return await self._handle_nonstreaming(
+                backend=backend, req=req, rid=rid,
+                extra_headers=extra_headers,
+                pchars=pchars, ptok_est=ptok_est,
+                preview=preview, full_prompt_dbg=full_prompt_dbg,
+                wait_time=wait_time,
+            )
+        finally:
+            if _acquired:
+                release_slot()
 
     async def _handle_nonstreaming(
         self,
@@ -243,6 +281,7 @@ class ChatCompletionService:
         ptok_est: int,
         preview: str,
         full_prompt_dbg: str,
+        wait_time: float | None,
     ) -> HttpResponse:
         start = time.perf_counter()
         status = 200
@@ -340,12 +379,13 @@ class ChatCompletionService:
                 "request_id": rid, "model": req.model,
                 "status": status, "latency_ms": int(wall * 1000),
                 "prompt_tokens": ptok_est, "completion_tokens": completion_tokens,
-                "stream": False,
+                "stream": False, "queue_wait_ms": int(wait_time * 1000) if wait_time else 0,
             })
 
             return HttpResponse(body, content_type="application/json")
         finally:
             ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).dec()
+            release_slot()
 
     async def _stream_sse(
         self,
@@ -358,6 +398,7 @@ class ChatCompletionService:
         prompt_tok_est: int,
         preview: str,
         full_prompt_dbg: str,
+        wait_time: float | None,
     ) -> AsyncIterator[bytes]:
         STREAMING_IN_FLIGHT.inc()
         start = time.perf_counter()
@@ -399,6 +440,7 @@ class ChatCompletionService:
             ACTIVE_INFERENCE_REQUESTS.labels(mode=self.mode).dec()
             UPSTREAM_LATENCY_SECONDS.observe(wall)
             STREAMING_DURATION_SECONDS.observe(wall)
+            release_slot()
 
             completion_tokens = counter.completion_token_estimate()
             await self._persist_success_log(
@@ -431,6 +473,7 @@ class ChatCompletionService:
                 "prompt_tokens": prompt_tok_est,
                 "completion_tokens": completion_tokens,
                 "stream": True, "error_kind": error_kind,
+                "queue_wait_ms": int(wait_time * 1000) if wait_time else 0,
             })
 
     async def _finalize_success_metrics(
@@ -573,7 +616,7 @@ class _SseTokenCounter:
 
 def _sse_error_chunk(message: str) -> bytes:
     payload = {"error": {"message": message, "type": "api_error"}}
-    return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
+    return f"data: {json.dumps(payload)}\n\n".encode()
 
 
 def _sse_error_bytes(body: bytes, status_code: int) -> bytes:
@@ -583,4 +626,4 @@ def _sse_error_bytes(body: bytes, status_code: int) -> bytes:
     except json.JSONDecodeError:
         wrapped = {"error": {"message": body.decode("utf-8", errors="replace"), "type": "upstream_error"}}
     wrapped["error"]["http_status"] = status_code
-    return f"data: {json.dumps(wrapped)}\n\n".encode("utf-8")
+    return f"data: {json.dumps(wrapped)}\n\n".encode()

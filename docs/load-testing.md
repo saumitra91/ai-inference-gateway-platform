@@ -96,77 +96,42 @@ brew install k6
 curl -fsSL https://dl.k6.io/install.sh | sh
 ```
 
-### 2.2 Basic script
+### 2.2 Using the k6 scripts
 
-Save as `loadtest.js`:
+The `loadtest/` directory contains four k6 scripts:
 
-```javascript
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-import { Rate, Trend } from 'k6/metrics';
+| Script | Description | Default VUs | Duration |
+|---|---|---|---|
+| `chat-streaming.js` | Streaming completions with TTFT tracking | 5 | 3m |
+| `chat-nonstreaming.js` | Non-streaming completions with usage validation | 10 | 3m |
+| `spike-test.js` | Sudden burst (0→20→0 VUs) — tests backpressure | 20 peak | 2m |
+| `soak-test.js` | Sustained moderate load, alternates streaming/non-streaming | 3 | 30m |
 
-const ttft = new Trend('ttft_ms');
-const streamDuration = new Trend('stream_duration_ms');
-const errorRate = new Rate('errors');
+All scripts support `K6_API_KEY`, `K6_BASE_URL`, and `K6_VUS` env vars.
+The soak test also respects `K6_DURATION`.
 
-export const options = {
-  stages: [
-    { duration: '30s', target: 5 },   // ramp up to 5 VUs
-    { duration: '1m', target: 10 },   // ramp to 10 VUs
-    { duration: '30s', target: 0 },   // ramp down
-  ],
-  thresholds: {
-    http_req_duration: ['p(95)<30000'],  // 95% under 30s
-    errors: ['rate<0.05'],               // <5% error rate
-  },
-};
-
-const API_KEY = __ENV.API_KEY || 'sk_local_...';
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:8888';
-
-export default function () {
-  const payload = JSON.stringify({
-    model: 'default',
-    messages: [
-      { role: 'user', content: 'Explain quantum computing in simple terms' },
-    ],
-    max_tokens: 128,
-    stream: false,
-  });
-
-  const params = {
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: '120s',
-  };
-
-  const res = http.post(`${BASE_URL}/v1/chat/completions`, payload, params);
-
-  check(res, {
-    'status is 200': (r) => r.status === 200,
-    'response has choices': (r) => {
-      try { return JSON.parse(r.body).choices?.length > 0; }
-      catch { return false; }
-    },
-  });
-
-  errorRate.add(res.status !== 200);
-  sleep(1);
-}
-```
-
-Run:
+Example — run the spike test:
 
 ```bash
-API_KEY="sk_local_..." k6 run loadtest.js
+K6_API_KEY="sk_local_..." k6 run loadtest/spike-test.js
+```
+
+Custom concurrency:
+
+```bash
+K6_API_KEY="sk_local_..." K6_VUS=15 k6 run loadtest/chat-nonstreaming.js
 ```
 
 ### 2.3 Streaming test with k6
 
-k6 does not natively support SSE streaming. For streaming load, use `hey` (above)
-or measure TTFT via the `inference_time_to_first_token_seconds` Prometheus metric.
+k6 buffers the entire HTTP response body, so streaming tests parse SSE events
+_post-hoc_ from the body. This means:
+- `ttft_ms` is measured as time-to-first-SSE-event-in-buffer (approximate)
+- `stream_duration_ms` is end-to-end (request start to last byte)
+- Chunks and bytes are counted for throughput estimation
+
+For real-time TTFT measurement, use the Prometheus metric
+`inference_time_to_first_token_seconds`.
 
 ### 2.4 Key metrics to monitor during load
 
@@ -211,7 +176,53 @@ docker compose logs django | grep '"stream": true' | jq '.ttft_ms' | sort -n \
 
 ---
 
-## 4. Known bottlenecks
+## 4. Backpressure testing
+
+The inference gateway implements per-process concurrency limiting via
+`asyncio.Semaphore`. When all slots are occupied, requests queue (up to
+`INFERENCE_QUEUE_SIZE`, default 10) and wait up to `INFERENCE_QUEUE_TIMEOUT_S`
+(default 30s) for a slot. If the queue is full, the server returns **503** with
+a structured JSON body.
+
+### Verifying backpressure
+
+Run the spike test and watch for 503 responses:
+
+```bash
+K6_API_KEY="sk_local_..." k6 run loadtest/spike-test.js
+```
+
+Expected behavior:
+1. At 20 VUs, 503s appear as the concurrency limiter activates
+2. `inference_rejected_overload_total` increments
+3. `inference_queue_depth` shows non-zero values
+4. Active requests saturate at `INFERENCE_MAX_CONCURRENCY`
+5. After the spike, 503s stop and queue drains
+
+### Tuning backpressure
+
+| Parameter | Effect | Tuning guidance |
+|---|---|---|
+| `INFERENCE_MAX_CONCURRENCY=4` | Max llama.cpp calls at once | Increase if llama.cpp has CPU headroom; decrease if OOM |
+| `INFERENCE_QUEUE_SIZE=10` | Max queued requests | Larger = more burst tolerance; smaller = faster 503 |
+| `INFERENCE_QUEUE_TIMEOUT_S=30.0` | Max queue wait time | Shorter for interactive UI; longer for batch jobs |
+
+### Monitoring during backpressure tests
+
+```promql
+# Are we rejecting?
+rate(inference_rejected_overload_total[1m])
+
+# How deep is the queue?
+inference_queue_depth
+
+# How long do requests wait?
+histogram_quantile(0.95, rate(inference_queue_wait_seconds_bucket[1m]))
+```
+
+---
+
+## 5. Known bottlenecks
 
 | Bottleneck | Symptom | Mitigation |
 |---|---|---|
@@ -223,13 +234,14 @@ docker compose logs django | grep '"stream": true' | jq '.ttft_ms' | sort -n \
 
 ---
 
-## 5. Suggested load-test scenarios
+## 6. Suggested load-test scenarios
 
-| Scenario | VUs | Duration | Key metric | Pass criteria |
-|---|---|---|---|---|
-| Light smoke | 1 | 30s | All 200s | 100% success |
-| Sustained load | 10 | 5m | p95 < 30s | <5% errors |
-| Burst | 0→20→0 | 1m | Recovery time | No persistent errors |
-| Long prompts | 5 | 2m | Memory stable | No OOM |
-| Error injection | 5 | 1m | Correct 400/413 | No 5xx for validation errors |
-| Streaming | 5 | 3m | TTFT p95 < 10s | No stream drop |
+| Scenario | Script | VUs | Duration | Key metric | Pass criteria |
+|---|---|---|---|---|---|---|
+| Light smoke | any | 1 | 30s | All 200s | 100% success |
+| Sustained non-streaming | `chat-nonstreaming.js` | 10 | 5m | p95 < 30s | <5% errors |
+| Streaming | `chat-streaming.js` | 5 | 3m | TTFT p95 < 10s | No stream drop |
+| Spike/burst | `spike-test.js` | 0→20→0 | 2m | Recovery time | 503s expected, no persistent errors |
+| Soak | `soak-test.js` | 3 | 30m | Latency trend | No degradation over time |
+| Long prompts | manual | 5 | 2m | Memory stable | No OOM |
+| Error injection | manual | 5 | 1m | Correct 400/413 | No 5xx for validation errors |

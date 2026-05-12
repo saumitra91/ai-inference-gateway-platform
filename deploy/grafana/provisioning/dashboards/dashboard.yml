@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: Inference
+    folder: Inference
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards

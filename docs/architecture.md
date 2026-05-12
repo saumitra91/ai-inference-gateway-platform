@@ -188,10 +188,12 @@ sequenceDiagram
 1. **Parse & validate** — `ChatCompletionRequest.model_validate_json(raw_body)` (Pydantic)
 2. **Rate limit** — `consume_rate_limit(api_key)` via Redis/LocMem
 3. **Daily quota** — `check_user_daily_quota(user, ptok_est, completion_budget)` from `UserProfile` settings
-4. **Proxy upstream** — `LlamaCppBackend.stream_chat_completion()` or `.chat_completion()`
-5. **Record metrics** — TTFT, latency, tokens, errors (Prometheus)
-6. **Persist log** — `InferenceRequestLog` (async DB write)
-7. **Post hooks** — `record_user_quota_success()`, `bump_api_key_usage()`
+4. **Concurrency slot** — `acquire()` from `apps/inference/services/concurrency.py`; returns 503 if queue is full
+5. **Proxy upstream** — `LlamaCppBackend.stream_chat_completion()` or `.chat_completion()`
+6. **Record metrics** — TTFT, latency, tokens, errors (Prometheus)
+7. **Persist log** — `InferenceRequestLog` (async DB write)
+8. **Post hooks** — `record_user_quota_success()`, `bump_api_key_usage()`
+9. **Release slot** — `release()` in the `finally` block of the streaming generator or non-streaming handler
 
 ### `LlamaCppBackend`
 
@@ -322,6 +324,9 @@ and the appropriate `inference_validation_errors_total` or
 | `inference_active_requests` | Gauge | `mode` | Currently active requests (in-flight) |
 | `inference_validation_errors_total` | Counter | `kind` | Validation failures by type |
 | `inference_rejected_requests_total` | Counter | `reason` | Rejected by policy (e.g. prompt_too_long) |
+| `inference_queue_depth` | Gauge | — | Number of requests waiting for a concurrency slot |
+| `inference_queue_wait_seconds` | Histogram | — | Time spent queued before inference starts |
+| `inference_rejected_overload_total` | Counter | — | Requests rejected because the queue was full (503) |
 | `inference_clamped_requests_total` | Counter | `field` | Parameters clamped to server limits |
 | `inference_max_tokens_requested` | Histogram | — | Distribution of requested max_tokens |
 | `inference_chat_completions_errors_total` | Counter | `kind` | Error count by type |
@@ -405,3 +410,5 @@ and the appropriate `inference_validation_errors_total` or
 10. **Early prompt validation** — prompt size is checked before defaults are applied, rate limits checked, or upstream calls made. This avoids wasting work on requests that will be rejected.
 11. **Structured error taxonomy** — each rejection has a unique `error_kind` string that maps 1:1 to a metric label, enabling precise error rate dashboards without high-cardinality labels.
 12. **Timeout as distinct error class** — `UpstreamTimeoutError` is separate from `UpstreamUnavailableError` so timeouts can be tracked independently. This matters for debug: timeouts suggest tuning timeout settings or model speed, while unavailability suggests infrastructure issues.
+13. **Per-process asyncio.Semaphore for concurrency** — Django runs single-worker by default, so a process-local semaphore is sufficient. The semaphore (as opposed to `asyncio.Queue`) keeps overhead minimal — acquire/release are O(1). Queue depth is tracked via a Prometheus Gauge, not a data structure. If multi-worker is needed, this must be replaced with a Redis-based distributed semaphore.
+14. **503 (not 429) for overload** — 429 implies the client sent too many requests and should back off (rate limiting). 503 signals server-side capacity exhaustion — the client may retry later. This matches both HTTP semantics and the operational action required (scale up or reduce concurrency). The response body is structured JSON compatible with OpenAI error format.

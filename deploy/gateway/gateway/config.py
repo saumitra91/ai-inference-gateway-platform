@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
     gateway_persist_logs: bool = True
 
+    inference_max_concurrency: int = 4
+    inference_queue_size: int = 10
+    inference_queue_timeout_s: float = 30.0
+
     def dsn_asyncpg(self) -> str:
         u = self.database_url
         if u.startswith("postgres://"):
