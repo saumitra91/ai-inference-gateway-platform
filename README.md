@@ -333,4 +333,4 @@ docs/
 
 ## License
 
-Proprietary — set a license before external distribution.
+MIT
