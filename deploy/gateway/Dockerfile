@@ -24,4 +24,4 @@ EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=4s --start-period=20s --retries=5 \
     CMD curl -sf http://127.0.0.1:8081/health || exit 1
 
-CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8081", "--proxy-headers"]
+CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8081", "--proxy-headers", "--timeout-graceful-shutdown", "60", "--limit-max-requests", "10000"]

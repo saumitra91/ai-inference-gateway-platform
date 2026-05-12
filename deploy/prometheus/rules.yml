@@ -1,0 +1,68 @@
+groups:
+  - name: inference
+    interval: 15s
+    rules:
+      # ── Request rate ──────────────────────────────────────────
+      - record: inference:request_rate:1m
+        expr: sum(rate(inference_chat_requests_total[1m]))
+      - record: inference:request_rate:5m
+        expr: sum(rate(inference_chat_requests_total[5m]))
+      - record: inference:streaming_request_rate:1m
+        expr: rate(inference_chat_completions_streaming_total[1m])
+      - record: inference:nonstreaming_request_rate:1m
+        expr: rate(inference_chat_completions_nonstreaming_total[1m])
+
+      # ── Error rate ────────────────────────────────────────────
+      - record: inference:error_rate:5m
+        expr: sum(rate(inference_chat_completions_errors_total[5m]))
+      - record: inference:timeout_rate:5m
+        expr: rate(inference_upstream_timeouts_total[5m])
+      - record: inference:overload_rate:5m
+        expr: rate(inference_rejected_overload_total[5m])
+      - record: inference:error_ratio:5m
+        expr: sum(rate(inference_chat_completions_errors_total[5m])) / sum(rate(inference_chat_requests_total[5m]) + 1)
+
+      # ── Latency percentiles (p50 / p95 / p99) ─────────────────
+      - record: inference:upstream_latency_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(inference_upstream_wall_seconds_bucket[5m])) by (le))
+      - record: inference:upstream_latency_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(inference_upstream_wall_seconds_bucket[5m])) by (le))
+      - record: inference:upstream_latency_p99:5m
+        expr: histogram_quantile(0.99, sum(rate(inference_upstream_wall_seconds_bucket[5m])) by (le))
+
+      - record: inference:ttft_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(inference_time_to_first_token_seconds_bucket[5m])) by (le))
+      - record: inference:ttft_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(inference_time_to_first_token_seconds_bucket[5m])) by (le))
+      - record: inference:ttft_p99:5m
+        expr: histogram_quantile(0.99, sum(rate(inference_time_to_first_token_seconds_bucket[5m])) by (le))
+
+      - record: inference:stream_duration_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(inference_streaming_duration_seconds_bucket[5m])) by (le))
+      - record: inference:stream_duration_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(inference_streaming_duration_seconds_bucket[5m])) by (le))
+
+      - record: inference:queue_wait_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(inference_queue_wait_seconds_bucket[5m])) by (le))
+      - record: inference:queue_wait_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(inference_queue_wait_seconds_bucket[5m])) by (le))
+
+      # ── Throughput ────────────────────────────────────────────
+      - record: inference:token_throughput:1m
+        expr: rate(inference_tokens_total{kind="completion"}[1m])
+      - record: inference:token_throughput:5m
+        expr: rate(inference_tokens_total{kind="completion"}[5m])
+
+      # ── Concurrency / saturation ──────────────────────────────
+      - record: inference:queue_saturation:1m
+        expr: inference_queue_depth / 10
+      - record: inference:active_requests:1m
+        expr: sum(inference_active_requests)
+      - record: inference:streaming_in_flight:1m
+        expr: inference_streaming_requests_in_flight
+
+      # ── Process health ────────────────────────────────────────
+      - record: inference:gateway_memory_gb:1m
+        expr: gateway_process_resident_memory_bytes / 1073741824
+      - record: inference:gateway_cpu:1m
+        expr: gateway_process_cpu_percent

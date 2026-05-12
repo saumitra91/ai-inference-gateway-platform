@@ -71,7 +71,6 @@ export default function () {
   };
   if (API_KEY) {
     headers['Authorization'] = `Bearer ${API_KEY}`;
-    headers["Content-Type"] = "application/json";
   }
 
   const startTime = Date.now();
@@ -93,12 +92,16 @@ export default function () {
 
   // Parse SSE events from response body
   const events = res.body.split('\n\n');
+  let foundDone = false;
   for (const event of events) {
     if (!event.trim()) continue;
     for (const line of event.split('\n')) {
       if (line.startsWith('data:')) {
         const data = line.slice(5).trim();
-        if (data === '[DONE]') continue;
+        if (data === '[DONE]') {
+          foundDone = true;
+          continue;
+        }
         if (data.startsWith('{"error"')) {
           streamErrors.add(1);
           continue;
@@ -122,6 +125,7 @@ export default function () {
   check(res, {
     'status is 200': (r) => r.status === 200,
     'has chunks': () => chunkCount > 0,
+    'has DONE sentinel': () => foundDone,
   });
 
   sleep(0.5);

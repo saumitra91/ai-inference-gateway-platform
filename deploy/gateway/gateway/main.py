@@ -22,6 +22,7 @@ from gateway.concurrency import release_slot as release_concurrency_slot
 from gateway.config import Settings
 from gateway.crypto_auth import APIKeyContext, touch_api_key_used, verify_bearer_token
 from gateway.limits import consume_rate_limit
+from gateway.runtime_metrics import collect_runtime_metrics
 from gateway.metrics import (
     ACTIVE_INFERENCE_REQUESTS,
     CHAT_COMPLETIONS_NONSTREAMING,
@@ -159,6 +160,7 @@ async def health_ready() -> JSONResponse:
 
 @app.get("/metrics")
 async def metrics() -> Response:
+    collect_runtime_metrics()
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -293,9 +295,7 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
     if stream:
 
         async def event_stream() -> AsyncIterator[bytes]:
-            log.info("level=info event=metrics_debug streaming_request_start request_id=%s", rid)
             CHAT_COMPLETIONS_STREAMING.inc()
-            log.info("level=info event=metrics_debug CHAT_COMPLETIONS_STREAMING.inc() done")
             CHAT_REQUESTS.labels(mode="programmatic").inc()
             ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").inc()
             STREAMING_IN_FLIGHT.inc()
@@ -311,24 +311,26 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                         status = resp.status_code
                         err = "upstream_http"
                         CHAT_COMPLETION_ERRORS.labels(kind="upstream_http").inc()
-                        log.info("level=info event=metrics_debug upstream_http_error status=%d", status)
                         err_body = await resp.aread()
-                        yield err_body
+                        yield f"data: {err_body.decode()}\n\n".encode()
                         return
                     async for chunk in resp.aiter_bytes():
                         if ttft is None and chunk:
                             ttft = time.perf_counter()
                             TTFT_SECONDS.observe(ttft - t0)
-                            log.info("level=info event=metrics_debug TTFT_SECONDS.observe() ttft_s=%.3f", ttft - t0)
                         total_bytes += len(chunk)
                         STREAM_BYTES.inc(len(chunk))
                         yield chunk
+            except asyncio.CancelledError:
+                status = 499
+                err = "client_disconnected"
+                CHAT_COMPLETION_ERRORS.labels(kind="client_disconnected").inc()
+                raise
             except httpx.ReadTimeout as exc:
                 status = 504
                 err = "upstream_timeout"
                 UPSTREAM_TIMEOUTS.inc()
                 CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
-                log.info("level=info event=metrics_debug upstream_timeout")
                 log.error("level=error event=upstream_timeout request_id=%s error=%s", rid, exc)
                 yield (
                     f'data: {json.dumps({"error": {"message": "Upstream timed out", "type": "api_error"}})}\n\n'
@@ -337,76 +339,75 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                 status = 502
                 err = "upstream_unavailable"
                 CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
-                log.info("level=info event=metrics_debug upstream_unavailable")
                 log.error("level=error event=upstream_error request_id=%s error=%s", rid, exc)
                 yield (
                     f'data: {json.dumps({"error": {"message": "Upstream unavailable", "type": "api_error"}})}\n\n'
                 ).encode()
             finally:
-                elapsed = time.perf_counter() - t0
-                UPSTREAM_LATENCY_SECONDS.observe(elapsed)
-                UPSTREAM_SECONDS.observe(elapsed)
-                log.info("level=info event=metrics_debug streaming_finalize elapsed=%.3f ttft=%s total_bytes=%d status=%d err=%s",
-                         elapsed, ttft, total_bytes, status, err)
-                STREAMING_IN_FLIGHT.dec()
-                ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").dec()
-                STREAMING_DURATION_SECONDS.observe(elapsed)
-                log.info("level=info event=metrics_debug STREAMING_DURATION_SECONDS.observe() done")
-                est_tokens = max(0, int(total_bytes // 4))
-                if est_tokens > 0:
-                    STREAM_TOKENS.labels(kind="completion").inc(est_tokens)
-                    log.info("level=info event=metrics_debug STREAM_TOKENS.inc() count=%d", est_tokens)
-                release_concurrency_slot(settings)
-                ttft_ms = int((ttft - t0) * 1000) if ttft else None
-                est_tps = (total_bytes / max(elapsed, 1e-9)) / 4.0
-                queue_wait_ms = int(wait_time * 1000) if wait_time else 0
-                log.info(
-                    "level=info event=request_complete request_id=%s route=chat stream=true "
-                    "latency_ms=%d stream_duration_ms=%d ttft_ms=%s bytes=%d est_tokens_per_sec=%.2f "
-                    "queue_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
-                    rid,
-                    int(elapsed * 1000),
-                    int(elapsed * 1000),
-                    ttft_ms,
-                    total_bytes,
-                    est_tps,
-                    queue_wait_ms,
-                    str(ctx.id),
-                    status,
-                    err,
-                )
-                REQUESTS.labels(route="chat", status=str(status)).inc()
-                asyncio.create_task(_touch_key(ctx.id))
-                asyncio.create_task(
-                    _persist_log(
-                        request_id=rid,
-                        user_id=ctx.user_id,
-                        api_key_id=ctx.id,
-                        model_name=model_name,
-                        stream=True,
-                        status_code=status,
-                        latency_ms=int(elapsed * 1000),
-                        stream_duration_ms=int(elapsed * 1000),
-                        ttft_ms=ttft_ms,
-                        prompt_chars=pchars,
-                        prompt_tok_est=ptok_est,
-                        completion_tokens=est_tokens,
-                        preview=preview,
-                        error_kind=err,
-                    ),
-                )
+                try:
+                    elapsed = time.perf_counter() - t0
+                    UPSTREAM_LATENCY_SECONDS.observe(elapsed)
+                    UPSTREAM_SECONDS.observe(elapsed)
+                    STREAMING_IN_FLIGHT.dec()
+                    ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").dec()
+                    STREAMING_DURATION_SECONDS.observe(elapsed)
+                    est_tokens = max(0, int(total_bytes // 4))
+                    if est_tokens > 0:
+                        STREAM_TOKENS.labels(kind="completion").inc(est_tokens)
+                    ttft_ms = int((ttft - t0) * 1000) if ttft else None
+                    est_tps = (total_bytes / max(elapsed, 1e-9)) / 4.0
+                    queue_wait_ms = int(wait_time * 1000) if wait_time else 0
+                    log.info(
+                        "level=info event=request_complete request_id=%s route=chat stream=true "
+                        "latency_ms=%d stream_duration_ms=%d ttft_ms=%s bytes=%d est_tokens_per_sec=%.2f "
+                        "queue_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
+                        rid,
+                        int(elapsed * 1000),
+                        int(elapsed * 1000),
+                        ttft_ms,
+                        total_bytes,
+                        est_tps,
+                        queue_wait_ms,
+                        str(ctx.id),
+                        status,
+                        err,
+                    )
+                    REQUESTS.labels(route="chat", status=str(status)).inc()
+                    asyncio.create_task(_touch_key(ctx.id))
+                    asyncio.create_task(
+                        _persist_log(
+                            request_id=rid,
+                            user_id=ctx.user_id,
+                            api_key_id=ctx.id,
+                            model_name=model_name,
+                            stream=True,
+                            status_code=status,
+                            latency_ms=int(elapsed * 1000),
+                            stream_duration_ms=int(elapsed * 1000),
+                            ttft_ms=ttft_ms,
+                            prompt_chars=pchars,
+                            prompt_tok_est=ptok_est,
+                            completion_tokens=est_tokens,
+                            preview=preview,
+                            error_kind=err,
+                        ),
+                    )
+                finally:
+                    release_concurrency_slot(settings)
 
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream; charset=utf-8",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        try:
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream; charset=utf-8",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        except Exception:
+            release_concurrency_slot(settings)
+            raise
 
     try:
         t0 = time.perf_counter()
-        log.info("level=info event=metrics_debug nonstreaming_request_start")
         CHAT_COMPLETIONS_NONSTREAMING.inc()
-        log.info("level=info event=metrics_debug CHAT_COMPLETIONS_NONSTREAMING.inc() done")
         CHAT_REQUESTS.labels(mode="programmatic").inc()
         ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").inc()
         status = 200
@@ -419,7 +420,6 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             out = resp.content
             if status >= 400:
                 err = "upstream_http"
-                log.info("level=info event=metrics_debug upstream_http_error status=%d", status)
             try:
                 parsed = json.loads(out.decode("utf-8"))
                 usage = parsed.get("usage") if isinstance(parsed, dict) else None
@@ -434,7 +434,6 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             err = "upstream_timeout"
             UPSTREAM_TIMEOUTS.inc()
             CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
-            log.info("level=info event=metrics_debug upstream_timeout")
             out = json.dumps({"error": {"message": "Upstream timed out", "type": "api_error"}}).encode()
             log.error("level=error event=upstream_timeout request_id=%s error=%s", rid, exc)
             ctok_final = 0
@@ -442,24 +441,18 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             status = 502
             err = "upstream_unavailable"
             CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
-            log.info("level=info event=metrics_debug upstream_unavailable")
             out = json.dumps({"error": {"message": "Upstream unavailable", "type": "api_error"}}).encode()
             log.error("level=error event=upstream_error request_id=%s error=%s", rid, exc)
             ctok_final = 0
 
         elapsed = time.perf_counter() - t0
-        log.info("level=info event=metrics_debug nonstreaming_finalize elapsed=%.3f status=%d err=%s ctok=%d",
-                 elapsed, status, err, ctok_final)
         ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").dec()
         UPSTREAM_LATENCY_SECONDS.observe(elapsed)
-        log.info("level=info event=metrics_debug UPSTREAM_LATENCY_SECONDS.observe() done")
         UPSTREAM_SECONDS.observe(elapsed)
         if status < 400:
             TTFT_SECONDS.observe(elapsed)
-            log.info("level=info event=metrics_debug TTFT_SECONDS.observe() done")
         if ctok_final > 0:
             STREAM_TOKENS.labels(kind="completion").inc(ctok_final)
-            log.info("level=info event=metrics_debug STREAM_TOKENS.inc() count=%d", ctok_final)
         tps = (len(out) / max(elapsed, 1e-9)) / 200.0
         queue_wait_ms = int(wait_time * 1000) if wait_time else 0
         log.info(

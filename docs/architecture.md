@@ -181,6 +181,81 @@ sequenceDiagram
 - TTL: 120s on first increment
 - Gateway returns 429 if exceeded
 
+### Concurrency control
+
+All programmatic API requests pass through a per-process `asyncio.Semaphore`
+before reaching llama.cpp. This prevents upstream overload and provides
+graceful degradation:
+
+1. **Acquire slot** — `concurrency.acquire_slot()` attempts to acquire the
+   semaphore. If all slots are busy, the request is enqueued (up to
+   `inference_queue_size`, default 10).
+2. **Queue timeout** — if a slot doesn't become available within
+   `inference_queue_timeout_s` (default 30s), returns 503.
+3. **Overload rejection** — if the queue is full, returns 503 immediately.
+4. **Release slot** — `concurrency.release_slot()` is called in the `finally`
+   block of every streaming generator and non-streaming handler.
+
+Queue depth is tracked via a module-level `_queue_count` integer and exposed
+through the `inference_queue_depth` Prometheus Gauge.
+
+### Metrics inventory
+
+All inference metrics are registered on both the gateway and Django. The
+gateway is the primary source for API traffic metrics since requests flow
+`k6 → nginx → gateway → llamacpp` (Django is not in the hot path).
+
+| Metric | Type | Labels | Instrumented in Gateway |
+|---|---|---|---|
+| `inference_chat_requests_total` | Counter | `mode` | Yes |
+| `inference_chat_completions_streaming_total` | Counter | — | Yes |
+| `inference_chat_completions_nonstreaming_total` | Counter | — | Yes |
+| `inference_active_requests` | Gauge | `mode` | Yes |
+| `inference_validation_errors_total` | Counter | `kind` | No (handled by Django UI path) |
+| `inference_rejected_requests_total` | Counter | `reason` | No (handled by Django UI path) |
+| `inference_queue_depth` | Gauge | — | Yes (via `_queue_count`) |
+| `inference_queue_wait_seconds` | Histogram | — | Yes |
+| `inference_rejected_overload_total` | Counter | — | Yes |
+| `inference_clamped_requests_total` | Counter | `field` | No (Django UI path) |
+| `inference_max_tokens_requested` | Histogram | — | No (Django UI path) |
+| `inference_chat_completions_errors_total` | Counter | `kind` | Yes |
+| `inference_upstream_timeouts_total` | Counter | — | Yes |
+| `inference_upstream_wall_seconds` | Histogram | — | Yes |
+| `inference_streaming_requests_in_flight` | Gauge | — | Yes |
+| `inference_rate_limit_exceeded_total` | Counter | — | Yes |
+| `inference_quota_exceeded_total` | Counter | — | No (Django UI path) |
+| `inference_time_to_first_token_seconds` | Histogram | — | Yes |
+| `inference_streaming_duration_seconds` | Histogram | — | Yes |
+| `inference_tokens_total` | Counter | `kind` | Yes |
+| `gateway_process_uptime_seconds` | Gauge | — | Yes |
+| `gateway_process_resident_memory_bytes` | Gauge | — | Yes |
+| `gateway_process_cpu_percent` | Gauge | — | Yes |
+
+### Gateway Prometheus recording rules
+
+The Prometheus rules file (`deploy/prometheus/rules.yml`) defines 18 recording
+rules for the gateway's inference metrics:
+
+| Rule | Source | Description |
+|---|---|---|
+| `inference:request_rate:rate5m` | `inference_chat_requests_total` | Request rate (last 5m) |
+| `inference:error_rate:rate5m` | `inference_chat_completions_errors_total` | Error rate (last 5m) |
+| `inference:error_ratio:rate5m` | errors / requests | Error ratio (last 5m) |
+| `inference:upstream_latency:p50` | `inference_upstream_wall_seconds` | p50 upstream latency |
+| `inference:upstream_latency:p95` | same | p95 upstream latency |
+| `inference:upstream_latency:p99` | same | p99 upstream latency |
+| `inference:ttft:p50` | `inference_time_to_first_token_seconds` | p50 TTFT |
+| `inference:ttft:p95` | same | p95 TTFT |
+| `inference:ttft:p99` | same | p99 TTFT |
+| `inference:stream_duration:p50` | `inference_streaming_duration_seconds` | p50 stream duration |
+| `inference:stream_duration:p95` | same | p95 stream duration |
+| `inference:token_throughput:rate5m` | `inference_tokens_total` | Token throughput (last 5m) |
+| `inference:queue_wait:p50` | `inference_queue_wait_seconds` | p50 queue wait time |
+| `inference:queue_wait:p95` | same | p95 queue wait time |
+| `inference:queue_saturation:ratio` | `inference_queue_depth / 10` | Queue saturation (0–1) |
+| `inference:active_requests:max5m` | `inference_active_requests` | Max active requests (last 5m) |
+| `inference:overload_rate:rate5m` | `inference_rejected_overload_total` | Overload rejection rate |
+
 ## Inference service (`apps/inference`)
 
 ### `ChatCompletionService` orchestration

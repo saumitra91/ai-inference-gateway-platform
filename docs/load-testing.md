@@ -98,12 +98,15 @@ curl -fsSL https://dl.k6.io/install.sh | sh
 
 ### 2.2 Using the k6 scripts
 
-The `loadtest/` directory contains four k6 scripts:
+The `loadtest/` directory contains seven k6 scripts:
 
 | Script | Description | Default VUs | Duration |
 |---|---|---|---|
 | `chat-streaming.js` | Streaming completions with TTFT tracking | 5 | 3m |
 | `chat-nonstreaming.js` | Non-streaming completions with usage validation | 10 | 3m |
+| `chat-mixed.js` | Concurrent streaming + non-streaming in separate scenarios | 4 stream / 6 non-stream | 3m |
+| `chat-cancellation.js` | Client disconnect simulation (aggressive timeout), then liveness check | 5 | ~50s |
+| `chat-timeout.js` | Upstream timeout simulation, then recovery check | 3 | ~50s |
 | `spike-test.js` | Sudden burst (0→20→0 VUs) — tests backpressure | 20 peak | 2m |
 | `soak-test.js` | Sustained moderate load, alternates streaming/non-streaming | 3 | 30m |
 
@@ -131,20 +134,69 @@ _post-hoc_ from the body. This means:
 - Chunks and bytes are counted for throughput estimation
 
 For real-time TTFT measurement, use the Prometheus metric
-`inference_time_to_first_token_seconds`.
+`inference_time_to_first_token_seconds` or the Grafana TTFT heatmap panel.
 
-### 2.4 Key metrics to monitor during load
+### 2.4 Cancellation test
+
+The `chat-cancellation.js` script simulates clients disconnecting mid-stream:
+
+1. **Cancellation wave** — 5 VUs send streaming requests with a 1s client timeout.
+   The request is aborted before the stream completes. The gateway should catch
+   `asyncio.CancelledError` and record `kind="client_disconnected"` in
+   `inference_chat_completions_errors_total`.
+2. **Liveness check** — After the wave, normal requests verify the gateway
+   recovered (no crash, no persistent errors).
+
+Pass criteria:
+- Gateway does not crash or hang after cancellations
+- `inference_chat_completions_errors_total{kind="client_disconnected"}` increments
+- Health check returns 200 after the cancellation wave
+
+### 2.5 Timeout test
+
+The `chat-timeout.js` script verifies upstream timeout behavior:
+
+1. **Timeout bursts** — 3 VUs send long-generation requests with a 2s client
+   timeout. The gateway should handle the upstream timeout gracefully.
+2. **Recovery check** — Normal requests verify the gateway recovered.
+
+Pass criteria:
+- Gateway does not crash after timeouts
+- Recovery requests succeed (200 OK)
+
+### 2.6 Mixed traffic test
+
+The `chat-mixed.js` script runs streaming and non-streaming VUs concurrently
+in separate k6 scenarios. This exercises both paths simultaneously, with
+independent metrics:
+
+| Metric | Source | Description |
+|---|---|---|
+| `stream_errors` | k6 | Streaming error rate |
+| `nonstream_errors` | k6 | Non-streaming error rate |
+| `stream_latency_ms` | k6 | Streaming end-to-end latency |
+| `nonstream_latency_ms` | k6 | Non-streaming latency |
+| `stream_ttft_ms` | k6 | Time-to-first-chunk (approximate) |
+
+Use this test to observe whether one path starves the other under load.
+
+### 2.7 Key Prometheus metrics to monitor during load
 
 | Metric | Where | What to watch |
 |---|---|---|
-| `inference_upstream_wall_seconds` | Prometheus/Django `/metrics` | P50/P95 upstream latency |
+| `inference_upstream_wall_seconds` | Prometheus (gateway job) | P50/P95 upstream latency |
 | `inference_time_to_first_token_seconds` | Prometheus | TTFT distribution |
 | `inference_streaming_duration_seconds` | Prometheus | Streaming session length |
 | `inference_chat_completions_errors_total` | Prometheus | Error rate by kind |
 | `inference_rejected_requests_total` | Prometheus | Validation/policy rejections |
 | `inference_upstream_timeouts_total` | Prometheus | Timeout count |
 | `inference_active_requests` | Prometheus | Current concurrency |
-| `django_process_resident_memory_bytes` | Prometheus | Django RSS during load |
+| `gateway_process_resident_memory_bytes` | Prometheus | Gateway RSS during load |
+| `inference_queue_depth` | Prometheus | Requests waiting for a concurrency slot |
+
+> **Note**: Always query inference metrics from the `gateway` Prometheus job.
+> The `django` job also exposes these metrics but only the gateway receives
+> programmatic API traffic.
 
 ---
 
@@ -166,11 +218,17 @@ histogram_quantile(0.95,
 )
 ```
 
+### Via Grafana
+
+The inference dashboard includes a TTFT heatmap panel (id:23) showing the
+distribution of time-to-first-token over time. Brighter regions indicate
+higher request density at a given latency range.
+
 ### Via structured logs
 
-The Django JSON log includes `ttft_ms` for streaming requests.
+The JSON log includes `ttft_ms` for streaming requests.
 ```bash
-docker compose logs django | grep '"stream": true' | jq '.ttft_ms' | sort -n \
+docker compose logs gateway | grep '"stream": true' | jq '.ttft_ms' | sort -n \
   | awk '{a[NR]=$1} END{print NR?"P50: "a[int(NR*0.5)]"\nP95: "a[int(NR*0.95)]:""}'
 ```
 
@@ -180,7 +238,7 @@ docker compose logs django | grep '"stream": true' | jq '.ttft_ms' | sort -n \
 
 The inference gateway implements per-process concurrency limiting via
 `asyncio.Semaphore`. When all slots are occupied, requests queue (up to
-`INFERENCE_QUEUE_SIZE`, default 10) and wait up to `INFERENCE_QUEUE_TIMEOUT_S`
+`inference_queue_size`, default 10) and wait up to `inference_queue_timeout_s`
 (default 30s) for a slot. If the queue is full, the server returns **503** with
 a structured JSON body.
 
@@ -196,16 +254,16 @@ Expected behavior:
 1. At 20 VUs, 503s appear as the concurrency limiter activates
 2. `inference_rejected_overload_total` increments
 3. `inference_queue_depth` shows non-zero values
-4. Active requests saturate at `INFERENCE_MAX_CONCURRENCY`
+4. Active requests saturate at `inference_max_concurrency`
 5. After the spike, 503s stop and queue drains
 
 ### Tuning backpressure
 
 | Parameter | Effect | Tuning guidance |
 |---|---|---|
-| `INFERENCE_MAX_CONCURRENCY=4` | Max llama.cpp calls at once | Increase if llama.cpp has CPU headroom; decrease if OOM |
-| `INFERENCE_QUEUE_SIZE=10` | Max queued requests | Larger = more burst tolerance; smaller = faster 503 |
-| `INFERENCE_QUEUE_TIMEOUT_S=30.0` | Max queue wait time | Shorter for interactive UI; longer for batch jobs |
+| `inference_max_concurrency=4` | Max llama.cpp calls at once | Increase if llama.cpp has CPU headroom; decrease if OOM |
+| `inference_queue_size=10` | Max queued requests | Larger = more burst tolerance; smaller = faster 503 |
+| `inference_queue_timeout_s=30.0` | Max queue wait time | Shorter for interactive UI; longer for batch jobs |
 
 ### Monitoring during backpressure tests
 
@@ -227,21 +285,24 @@ histogram_quantile(0.95, rate(inference_queue_wait_seconds_bucket[1m]))
 | Bottleneck | Symptom | Mitigation |
 |---|---|---|
 | llama.cpp CPU-bound | High `upstream_wall_seconds`, low token throughput | Reduce context size, use smaller quantized model, increase threads |
-| Django worker saturation | 502/503, connection timeouts | Increase `--workers` in uvicorn command |
+| Gateway worker saturation | 503, connection timeouts | Increase `--workers` in uvicorn command |
 | Redis contention | RPM/quota checks slow | Use dedicated Redis instance, or in-memory for single-worker dev |
-| Body size limits | 413 responses | Increase `INFERENCE_MAX_REQUEST_BODY_BYTES` if needed |
-| Too many concurrent streams | OOM in Django | Monitor `inference_active_requests`, set uvicorn `--limit-max-requests` |
+| Body size limits | 413 responses | Increase `inference_max_request_body_bytes` if needed |
+| Too many concurrent streams | OOM in gateway | Monitor `inference_active_requests`, set uvicorn `--limit-max-requests` |
 
 ---
 
 ## 6. Suggested load-test scenarios
 
 | Scenario | Script | VUs | Duration | Key metric | Pass criteria |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | Light smoke | any | 1 | 30s | All 200s | 100% success |
 | Sustained non-streaming | `chat-nonstreaming.js` | 10 | 5m | p95 < 30s | <5% errors |
 | Streaming | `chat-streaming.js` | 5 | 3m | TTFT p95 < 10s | No stream drop |
+| Mixed traffic | `chat-mixed.js` | 4+6 | 3m | Both paths stable | Neither path error rate >5% |
 | Spike/burst | `spike-test.js` | 0→20→0 | 2m | Recovery time | 503s expected, no persistent errors |
+| Client cancellation | `chat-cancellation.js` | 5 | ~50s | Gateway survives | Health check passes after wave |
+| Upstream timeout | `chat-timeout.js` | 3 | ~50s | Gateway handles timeouts | Recovery requests succeed |
 | Soak | `soak-test.js` | 3 | 30m | Latency trend | No degradation over time |
 | Long prompts | manual | 5 | 2m | Memory stable | No OOM |
 | Error injection | manual | 5 | 1m | Correct 400/413 | No 5xx for validation errors |

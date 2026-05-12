@@ -81,13 +81,17 @@ export default function () {
   if (isOk && isStreaming) {
     let first = true;
     let chunks = 0;
+    let foundDone = false;
     const events = res.body.split('\n\n');
     for (const event of events) {
       if (!event.trim()) continue;
       for (const line of event.split('\n')) {
         if (line.startsWith('data:')) {
           const data = line.slice(5).trim();
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            foundDone = true;
+            continue;
+          }
           if (data.startsWith('{"error"')) {
             errorRate.add(true);
             continue;

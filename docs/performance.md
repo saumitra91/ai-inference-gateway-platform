@@ -2,17 +2,19 @@
 
 ## Concurrency model
 
-Inference requests pass through a per-process `asyncio.Semaphore` before reaching
-llama.cpp. This prevents Django worker thread oversubscription and provides
-graceful degradation under load.
+Inference requests pass through a per-process `asyncio.Semaphore` in the
+**FastAPI gateway** before reaching llama.cpp. This prevents upstream
+oversubscription and provides graceful degradation under load.
 
-### Configuration
+### Gateway configuration
+
+The gateway uses its own Settings class (`deploy/gateway/gateway/config.py`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `INFERENCE_MAX_CONCURRENCY` | 4 | Max simultaneous upstream requests per Django process |
-| `INFERENCE_QUEUE_SIZE` | 10 | Max requests waiting for a slot before 503 |
-| `INFERENCE_QUEUE_TIMEOUT_S` | 30.0 | How long a queued request waits before 503 |
+| `inference_max_concurrency` | 4 | Max simultaneous upstream requests per gateway process |
+| `inference_queue_size` | 10 | Max requests waiting for a slot before 503 |
+| `inference_queue_timeout_s` | 30.0 | How long a queued request waits before 503 |
 
 ### Backpressure flow
 
@@ -32,25 +34,25 @@ flowchart LR
 
 | Metric | What it measures | Action if elevated |
 |---|---|---|
-| `inference_queue_depth` | Requests waiting for a slot | Increase `INFERENCE_MAX_CONCURRENCY` or scale workers |
+| `inference_queue_depth` | Requests waiting for a slot | Increase `inference_max_concurrency` or scale workers |
 | `inference_queue_wait_seconds` | How long requests wait in queue | Check llama.cpp throughput; reduce prompt sizes |
 | `inference_rejected_overload_total` | Requests returned 503 | Increase capacity or rate-limit clients |
-| `inference_active_requests` | Currently in-flight upstream calls | Compare against `INFERENCE_MAX_CONCURRENCY` |
+| `inference_active_requests` | Currently in-flight upstream calls | Compare against `inference_max_concurrency` |
 
 ## Bottlenecks
 
 | Tier | Bottleneck | Symptom | Mitigation |
 |---|---|---|---|
 | **llama.cpp** | CPU-bound context processing | High `upstream_wall_seconds`, low tokens/sec | Smaller quantized model, fewer threads, shorter context |
-| **Django ASGI** | Event loop saturation | Elevated `queue_wait_seconds`, 503 spikes | Raise `INFERENCE_MAX_CONCURRENCY`, add uvicorn workers |
+| **FastAPI Gateway** | Event loop saturation | Elevated `queue_wait_seconds`, 503 spikes | Raise `inference_max_concurrency`, add uvicorn workers |
 | **httpx pool** | Connection pool exhaustion | `UpstreamUnavailableError` with connection timeouts | Increase `max_connections` in `http_client.py` |
 | **Postgres** | Log persistence I/O | Slow `persist_inference_request_log` (async) | Increase `LOG_RETENTION_DAYS` or tune checkpoint intervals |
 | **Redis** | Rate limit / quota key banging | Elevated Redis latency | Reduce `RATE_LIMIT_RPM` checks, use pipeline |
 
 ## Throughput guidance
 
-These numbers assume a single Django worker and a typical 7B-parameter Q4_K_M model
-on a modern CPU (M-series or Xeon with AVX2). Your results will vary.
+These numbers assume a single gateway worker and a typical 7B-parameter Q4_K_M
+model on a modern CPU (M-series or Xeon with AVX2). Your results will vary.
 
 | Scenario | Max concurrency | Observed throughput | Bottleneck |
 |---|---|---|---|
@@ -64,24 +66,24 @@ new requests queue or get 503 instead of timing out after 600s.
 
 ## Tuning guidelines
 
-### When to increase `INFERENCE_MAX_CONCURRENCY`
+### When to increase `inference_max_concurrency`
 
 - `inference_active_requests` is consistently at the current limit
 - `inference_queue_depth` is non-zero for sustained periods
 - llama.cpp has headroom (not at 100% CPU, not OOM)
 
-### When to decrease `INFERENCE_MAX_CONCURRENCY`
+### When to decrease `inference_max_concurrency`
 
 - llama.cpp CPU is saturated (>90% user time)
 - `upstream_wall_seconds` p95 degrades as concurrency increases (thrashing)
-- Django RSS grows under concurrent streaming (many SSE buffers in memory)
+- Gateway RSS grows under concurrent streaming (many SSE buffers in memory)
 
-### When to increase `INFERENCE_QUEUE_SIZE`
+### When to increase `inference_queue_size`
 
 - Brief bursts of traffic expected (spike pattern)
 - Clients can tolerate 10-30s queuing delay
 
-### When to decrease `INFERENCE_QUEUE_TIMEOUT_S`
+### When to decrease `inference_queue_timeout_s`
 
 - Clients prefer fast 503 over waiting
 - Interactive UI requests should queue briefly (<5s)
@@ -90,13 +92,13 @@ new requests queue or get 503 instead of timing out after 600s.
 
 With `--workers 1`, maximum throughput is bounded by:
 1. llama.cpp token generation speed
-2. Django ASGI event loop not blocking on sync DB/Redis operations
+2. FastAPI event loop not blocking on sync DB/Redis operations
 3. httpx connection pool (default: 100 max connections)
 
 If the concurrency limiter is the active bottleneck (queue depth > 0, rejected
 overload > 0, but llama.cpp has headroom), consider:
 
-- Increasing `INFERENCE_MAX_CONCURRENCY` conservatively
+- Increasing `inference_max_concurrency` conservatively
 - Adding uvicorn workers (each gets its own semaphore — scale linearly, but
   llama.cpp becomes the bottleneck sooner)
 - Replacing the per-process semaphore with a Redis-based distributed semaphore
@@ -112,12 +114,12 @@ order:
 1. **llama.cpp CPU** — token generation is CPU-bound. As concurrent requests
    increase, each request competes for CPU time, increasing TTFT and per-token
    latency. This is the true bottleneck in virtually all scenarios.
-2. **Concurrency semaphore** — once `INFERENCE_MAX_CONCURRENCY` is reached,
+2. **Concurrency semaphore** — once `inference_max_concurrency` is reached,
    the queue fills. Upstream latency continues degrading as llama.cpp context
    switches between active sequences.
-3. **Queue capacity** — with `QUEUE_SIZE=10`, 10 requests can wait. Beyond
+3. **Queue capacity** — with `inference_queue_size=10`, 10 requests can wait. Beyond
    that, new requests get 503. This is the _protection mechanism_ kicking in.
-4. **Django event loop** — if llama.cpp is fast enough (small models, GPU),
+4. **FastAPI event loop** — if llama.cpp is fast enough (small models, GPU),
    the ASGI event loop can become saturated by the overhead of async iteration.
 5. **httpx connection pool** — at 100 concurrent connections, the pool exhausts
    and new upstream connections queue internally.
@@ -152,7 +154,7 @@ If GPU offload is added (llama.cpp `--n-gpu-layers N`), the bottleneck shifts:
 | TTFT | Seconds | Milliseconds |
 | Tokens/sec | 5-20 | 50-200+ |
 
-With GPU, the bottleneck moves from llama.cpp to the Django ASGI event loop
+With GPU, the bottleneck moves from llama.cpp to the gateway event loop
 and httpx connection pool, since requests complete faster.
 
 ### Scaling tradeoffs
@@ -176,12 +178,15 @@ and httpx connection pool, since requests complete faster.
    verified by the large model. Can 2-3× token throughput on CPU.
 4. **Redis-based distributed semaphore** — replace the per-process
    `asyncio.Semaphore` with a Redis semaphore when multi-worker is needed.
-5. **Adaptive concurrency** — dynamically adjust `INFERENCE_MAX_CONCURRENCY`
+5. **Adaptive concurrency** — dynamically adjust `inference_max_concurrency`
    based on observed upstream latency, to prevent thrashing under variable load.
 6. **Preemption** — when a 503 is imminent, consider cancelling the
    longest-running streaming request instead (requires client retry support).
 
 ## Monitoring queries
+
+All metrics should be queried from the Prometheus gateway job. The Django job
+will also expose inference metrics, but only the gateway receives API traffic.
 
 ### Current queue depth
 
@@ -206,5 +211,12 @@ rate(inference_rejected_overload_total[5m])
 ### Utilization vs capacity
 
 ```promql
-inference_active_requests / INFERENCE_MAX_CONCURRENCY
+inference_active_requests / 4
+```
+
+### Gateway memory and CPU
+
+```promql
+gateway_process_resident_memory_bytes / 1073741824
+gateway_process_cpu_percent
 ```
