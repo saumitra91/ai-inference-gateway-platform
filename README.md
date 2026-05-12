@@ -204,8 +204,11 @@ cp .env.example .env
 # 3. Start the stack
 docker compose up --build
 
-# 4. Create an API key
-#     Open http://localhost:8888/staff/api-keys/ (login: admin / admin)
+# 4. Create an admin user (required — no registration UI exists)
+docker compose exec django python manage.py createsuperuser
+
+# 5. Create an API key
+#     Open http://localhost:8888/staff/api-keys/ (login with the user above)
 ```
 
 ### Entry points
