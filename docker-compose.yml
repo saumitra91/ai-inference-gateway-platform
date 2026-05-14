@@ -42,11 +42,13 @@ services:
       PORT: "8080"
       # EXTRA_ARGS: space-separated additional flags, e.g. "--no-mmap --flash-attn"
       # --parallel: llama.cpp parallel slots.  Must match inference_max_concurrency.
-      #   Each slot consumes ~450 MB KV cache per 4096 ctx (3B model).
-      #   8 slots × 450 MB = 3.6 GB — fine on a 16 GB machine with a 2 GB model.
+      #   Each slot consumes ctx-size / parallel tokens of KV cache.  At 8192 ctx / 4 slots,
+      #   each slot gets 2048 tokens ÷ ~450 MB per 4096 tokens of KV (3B model) = ~900 MB × 4 = 3.6 GB.
+      #   --ctx-size 8192 gives enough headroom for RAG prompts (~1500 tokens per request).
+      #   KV cache math: 820 MB per 4096-token slot for a 3B model.  4 slots × ~820 MB × (8192/4096) = ~6.6 GB.
       # --batch-size / --ubatch-size: prompt-token batch for the prefill phase
       #   Larger = faster prompt processing for concurrent requests
-      EXTRA_ARGS: "--parallel 8 --batch-size 1024 --ubatch-size 512"
+      EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512 --ctx-size 8192"
     volumes:
       - ./models:/models:ro
     expose:
@@ -75,7 +77,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
       GATEWAY_PERSIST_LOGS: "true"
-      INFERENCE_MAX_CONCURRENCY: "8"
+      INFERENCE_MAX_CONCURRENCY: "4"
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,6 +169,20 @@ services:
       django:
         condition: service_started
 
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/data
+      ALLOW_RESET: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chromadb_data:/chroma/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    mem_limit: 1g
+
   grafana:
     image: grafana/grafana:11.2.0
     environment:
@@ -185,5 +201,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  chromadb_data:
   prometheus_data:
   grafana_data:

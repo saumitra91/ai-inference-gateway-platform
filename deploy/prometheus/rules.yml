@@ -73,6 +73,22 @@ groups:
       - record: inference:batch_single_ratio:5m
         expr: rate(inference_batch_single_dispatches_total[5m]) / (rate(inference_batch_dispatches_total[5m]) + 1)
 
+      # ── RAG ───────────────────────────────────────────────────
+      - record: rag:request_rate:1m
+        expr: sum(rate(rag_completions_total[1m]))
+      - record: rag:retrieval_latency_p50:5m
+        expr: histogram_quantile(0.50, sum(rate(rag_retrieval_latency_seconds_bucket[5m])) by (le))
+      - record: rag:retrieval_latency_p95:5m
+        expr: histogram_quantile(0.95, sum(rate(rag_retrieval_latency_seconds_bucket[5m])) by (le))
+      - record: rag:hallucination_fallback_rate:5m
+        expr: rate(rag_hallucination_fallbacks_total[5m])
+      - record: rag:avg_chunks_per_query:5m
+        expr: rate(rag_retrieved_chunks_per_query_sum[5m]) / (rate(rag_retrieved_chunks_per_query_count[5m]) + 1)
+      - record: rag:documents_ready:1m
+        expr: rag_documents_ready
+      - record: rag:ingestion_rate:5m
+        expr: rate(rag_documents_uploaded_total[5m])
+
       # ── Process health ────────────────────────────────────────
       - record: inference:gateway_memory_gb:1m
         expr: gateway_process_resident_memory_bytes / 1073741824

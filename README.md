@@ -11,6 +11,12 @@ Client → nginx :8888 → FastAPI Gateway :8081 → llama.cpp :8080 → GGUF Mo
                      Rate Limiter (Redis)       data: [DONE]
                      API Key Auth (Postgres)
                      Prometheus /metrics
+
+Django Control Plane :8000 ─── ChromaDB :8000 ─── sentence-transformers
+       │
+       ├── RAG Chat UI   →  /rag/chat/
+       ├── PDF Upload     →  /rag/documents/
+       └── RAG API        →  /rag/api/completions (augmented prompt → llama.cpp)
 ```
 
 ---
@@ -40,9 +46,17 @@ Client → nginx :8888 → FastAPI Gateway :8081 → llama.cpp :8080 → GGUF Mo
 │                             Redis :6379 │ PostgreSQL :5432          │
 ├─────────────────────────────────────────────────────────────────────┤
 │  L4  OBSERVABILITY LAYER   Prometheus :9090 │ Grafana :3000         │
+│                             │  RAG Pipeline (Django)             │    │
+│                             │    PDF Ingestion → Chunk → Embed   │    │
+│                             │    ChromaDB → Retrieve → Augment    │    │
+│                             │    sentence-transformers (384d)     │    │
+│                             └──────────────────────────────────┘    │
+│                             ChromaDB :8000 (persistent vectors)     │
+├─────────────────────────────────────────────────────────────────────┤
+│  L4  OBSERVABILITY LAYER   Prometheus :9090 │ Grafana :3000         │
 │                             ┌──────────────────────────────────┐    │
-│                             │  23-panel dashboard              │    │
-│                             │  18 Prometheus recording rules   │    │
+│                             │  36-panel dashboard              │    │
+│                             │  26 Prometheus recording rules   │    │
 │                             └──────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -108,6 +122,9 @@ flowchart LR
 | **Dispatch-time batching (not request fusion)** | Requests are held briefly then released simultaneously, letting llama.cpp batch prompt processing internally. No HTTP body merging needed — preserves per-request streaming and OpenAI compatibility |
 | **Batching after concurrency slot acquisition** | Slots are held during batching wait, maintaining proper backpressure. Without this, the batch could grow unbounded while the upstream is saturated |
 | **Small default window (50ms)** | Balances TTFT increase against batching opportunity. Under light load, 50ms penalty is negligible. Under heavy load, multiple requests accumulate within the window |
+| **sentence-transformers for embeddings (not llama.cpp)** | Embedding via llama.cpp is ~1-2s per chunk (single forward pass); sentence-transformers/all-MiniLM-L6-v2 is ~10ms. For batch ingestion of 100+ chunks, the difference is 100s vs 1s. Both models are in the same embedding space (cosine similarity), but a dedicated embedding model is 100× faster for bulk operations |
+| **ChromaDB over pgvector** | ChromaDB is purpose-built for vector search with cosine similarity, HNSW indexing, and metadata filtering. pgvector would couple vector search to the relational DB, require a Postgres extension, and offer no advantage for this single-node deployment. ChromaDB runs as an independent service with persistent storage |
+| **RAG in Django (not gateway)** | Django owns the ORM, admin UI, templates, and session auth. Adding RAG to Django avoids cross-service file transfers for PDF ingestion, keeps the gateway focused on inference orchestration, and leverages existing LlamaCppBackend for the generation step |
 
 ---
 
@@ -177,6 +194,141 @@ flowchart LR
 - `inference:gateway_memory_gb:1m`, `inference:gateway_cpu:1m`
 - `inference:batch_size_avg:5m`, `inference:batch_efficiency:5m`, `inference:batch_single_ratio:5m`
 - `inference:batch_wait_p50/p95:5m`
+
+### RAG Pipeline
+
+A production-style Retrieval-Augmented Generation system integrated into the existing control plane. Users upload PDFs, documents are chunked and embedded, and chat responses are grounded in retrieved context with explicit source citations.
+
+**Architecture:**
+
+```
+User uploads PDF → Django saves file + creates Document record
+                         ↓
+              Background task (asyncio.create_task):
+                PyMuPDF → extract text page-by-page
+                     ↓
+                Recursive chunker → paragraph → sentence → word fallback
+                  Configurable: chunk_size=500, chunk_overlap=50
+                     ↓
+                sentence-transformers/all-MiniLM-L6-v2 → 384-dim embeddings
+                     ↓
+                ChromaDB HTTP client → store with metadata (doc_id, page, chunk_index)
+                     ↓
+                Document.status = ready
+
+User asks question → Django RAG Chat UI → POST /rag/api/completions
+                         ↓
+              Embed query via sentence-transformers
+                     ↓
+              ChromaDB similarity search (cosine, top_k=5)
+                     ↓
+              Filter by confidence threshold (min_score=0.25)
+                     ↓
+              If no chunks above threshold:
+                → Return "I could not find this information in the uploaded documents."
+                → Increment rag_hallucination_fallbacks_total
+                     ↓
+              Build augmented prompt:
+                System: "Answer using ONLY this context. If not found, say so."
+                Context: [Source: doc.pdf, page 3] ...text...
+                Messages: [user's conversation history]
+                     ↓
+              Stream to llama.cpp via existing LlamaCppBackend
+                     ↓
+              SSE events sent: rag_metadata (citations) → token stream → [DONE]
+                     ↓
+              Frontend renders citations as badges: [doc_id… p.3]
+```
+
+**Anti-Hallucination Strategy:**
+
+| Layer | Mechanism |
+|---|---|
+| **Confidence threshold** | `RAG_MIN_SCORE=0.25` — chunks below this cosine similarity are discarded. If no chunks survive, the model explicitly says "not found". Default tuned for all-MiniLM-L6-v2's typical similarity range (0.2–0.6) |
+| **System prompt** | Hard-coded instruction: "Answer based ONLY on the provided context. Do NOT use your training data. If the context does not contain enough information, say EXACTLY: 'I could not find this information in the uploaded documents.'" |
+| **Source grounding** | Every chunk in context is prefixed with `[Source: {document_id}, page {page}]` — the model can reference these directly |
+| **No fabricated citations** | The citation data comes from actual retrieval metadata, not from the model's output. Citations are sent as structured `rag_metadata` SSE events alongside the token stream |
+| **Context window limit** | `RAG_MAX_CONTEXT_CHARS=8000` prevents oversized prompts that might overwhelm the relevant context signal |
+
+**Embedding Model: sentence-transformers/all-MiniLM-L6-v2**
+
+- **Dimensions**: 384 (compact, fast cosine similarity)
+- **Size**: ~80 MB loaded in memory
+- **Speed**: ~10ms per text on CPU (vs ~1-2s via llama.cpp forward pass)
+- **Quality**: MTEB score ~58 — sufficient for retrieval tasks
+- **Tradeoff**: Diminutive compared to BGE or E5 models, but 10× faster and 5× smaller. For a local single-user system, speed and memory efficiency outweigh marginal recall gains
+- **Normalization**: embeddings are L2-normalized so cosine similarity = dot product
+
+**Vector Database: ChromaDB**
+
+| Aspect | Decision |
+|---|---|
+| **Why ChromaDB** | Purpose-built for vector search with HNSW indexing, cosine similarity, metadata filtering. No Postgres extension needed. Independent service with persistent volume |
+| **Why not pgvector** | Would couple vector search to the relational DB. Requires pgvector extension install and migration. No operational advantage for a single-node deployment |
+| **Why not Qdrant** | Best-in-class performance but overkill for local single-user. Higher memory footprint. No significant feature benefit for this use case |
+| **Index** | HNSW with cosine distance (`hnsw:space: cosine`). Default ef_construction and M parameters |
+| **Persistence** | Docker named volume `chromadb_data` — survives container restarts |
+| **Batching** | Chunks stored in batches of 100 to balance throughput vs memory |
+| **Metadata** | Each chunk stores `document_id`, `chunk_index`, `page_number` for source tracking and filtered retrieval |
+
+**Chunking Strategy:**
+
+```
+paragraph split → over-sized? → sentence split → over-sized? → word split
+     ↓                    ↓                    ↓
+  exact               sentences             words
+  paragraphs          with overlap          with overlap
+```
+
+- **Default chunk size**: 500 characters (configurable via `RAG_CHUNK_SIZE`)
+- **Default overlap**: 50 characters (configurable via `RAG_CHUNK_OVERLAP`)
+- Overlap computed from trailing sentences, not raw characters — preserves semantic boundaries
+- Chunks are re-indexed globally after page-level chunking so chunk_index is monotonically increasing
+
+**RAG Observability (10 Prometheus metrics):**
+
+| Metric | Type | Description |
+|---|---|---|
+| `rag_completions_total` | Counter | Total RAG-augmented chat completions |
+| `rag_hallucination_fallbacks_total` | Counter | "Not found in documents" responses |
+| `rag_retrieval_latency_seconds` | Histogram | Time to embed query + ChromaDB search + filter |
+| `rag_retrieved_chunks_per_query` | Histogram | Number of chunks returned per query |
+| `rag_ingestion_duration_seconds` | Histogram | Time to fully process a document |
+| `rag_embedding_latency_seconds` | Histogram | Time per embedding batch |
+| `rag_vector_db_latency_seconds` | Histogram | Raw ChromaDB query time |
+| `rag_documents_uploaded_total` | Counter | Total documents uploaded |
+| `rag_chunks_stored_total` | Counter | Total chunks stored |
+| `rag_documents_ready` | Gauge | Number of successfully indexed documents |
+
+**Grafana Dashboard — 7 RAG panels:**
+
+- **RAG Request Rate** (stat) — RAG completions per second
+- **RAG Hallucination Fallbacks** (stat) — "not found" count, alerts on model hallucination risk
+- **Documents Ready** (stat) — number of indexed documents
+- **Ingestion & Chunks Rate** (stat) — document upload rate
+- **Retrieval Latency p50/p95** (timeseries) — time to embed, search, and filter
+- **Avg Chunks Retrieved per Query** (timeseries) — retrieval depth over time
+- **Ingestion Duration** (timeseries) — document processing time (healthy baseline tracking)
+
+**Prometheus Recording Rules — 7 RAG rules:**
+
+- `rag:request_rate:1m`, `rag:retrieval_latency_p50:5m`, `rag:retrieval_latency_p95:5m`
+- `rag:hallucination_fallback_rate:5m`, `rag:avg_chunks_per_query:5m`
+- `rag:documents_ready:1m`, `rag:ingestion_rate:5m`
+
+**RAG Configuration (Django settings / .env):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_ENABLED` | `true` | Feature toggle |
+| `RAG_CHUNK_SIZE` | 500 | Characters per chunk |
+| `RAG_CHUNK_OVERLAP` | 50 | Overlap between consecutive chunks (chars) |
+| `RAG_TOP_K` | 5 | Number of chunks retrieved per query |
+| `RAG_MIN_SCORE` | 0.25 | Minimum cosine similarity for chunk inclusion (all-MiniLM-L6-v2 typically returns 0.2–0.6) |
+| `RAG_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | sentence-transformers model name |
+| `RAG_MAX_CONTEXT_CHARS` | 8000 | Max context characters sent to the model |
+| `CHROMADB_HOST` | `chromadb` | ChromaDB Docker service host |
+| `CHROMADB_PORT` | 8000 | ChromaDB HTTP API port |
 
 ### Resilience
 - Graceful shutdown with 60s connection drain (`--timeout-graceful-shutdown`)
@@ -301,7 +453,7 @@ Gateway settings (`deploy/gateway/gateway/config.py`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `inference_max_concurrency` | 4 | Max simultaneous llama.cpp calls. Must NOT exceed llama.cpp `--parallel` |
+| `inference_max_concurrency` | 4 | Max simultaneous llama.cpp calls. Must match llama.cpp `--parallel` and be ≤ `ctx-size / prompt-tokens` |
 | `inference_queue_size` | 10 | Max queued requests before 503 |
 | `inference_queue_timeout_s` | 30.0 | Queue wait timeout before 503 |
 | `batch_window_ms` | 50.0 | Time window for aggregating requests into a batch (ms) |
@@ -314,12 +466,14 @@ The gateway's `inference_max_concurrency` must match llama.cpp's `--parallel` sl
 
 | Gateway config | llama.cpp `EXTRA_ARGS` | Behavior |
 |---|---|---|
-| `inference_max_concurrency=4` | `--parallel 4` | 4 concurrent requests processed simultaneously with prompt batching ✓ |
-| `inference_max_concurrency=4` | `--parallel 1` (default) | 1 processed, 3 queue inside llama.cpp — **queue wait spikes** ✗ |
+| `inference_max_concurrency=4` | `--parallel 4 --ctx-size 8192` | 4 concurrent requests, each with 2048 tokens context ✓ |
+| `inference_max_concurrency=4` | `--parallel 1 --ctx-size 4096` (default) | 1 processed, 3 queue inside llama.cpp — **queue wait spikes** ✗ |
+
+With `--parallel N`, each slot gets `ctx-size / N` tokens. For RAG workloads, each slot needs ~1500 tokens (context + output), so `8192 / 4 = 2048` tokens per slot is the minimum recommended configuration.
 
 Set in `docker-compose.yml`:
 ```yaml
-EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512"
+EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512 --ctx-size 8192"
 ```
 
 ---
@@ -340,16 +494,43 @@ deploy/
 │       └── config.py     # Pydantic settings
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape config (django + gateway)
-│   └── rules.yml         # 22 recording rules
+│   └── rules.yml         # 29 recording rules (7 RAG specific)
 ├── grafana/
 │   └── provisioning/
 │       └── dashboards/
-│           └── inference-dashboard.json  # 29 panels
+│           └── inference-dashboard.json  # 36 panels (7 RAG specific)
 ├── nginx/
 │   └── default.conf      # Route /v1/ to gateway, / to Django
 └── llamacpp/             # Multi-arch llama.cpp Docker build
 
-loadtest/                 # 7 k6 test scripts
+apps/
+├── rag/                   # RAG pipeline
+│   ├── models.py          # Document model (UUID PK, status, chunk tracking)
+│   ├── views.py           # Upload, list, status, RAG chat, streaming completions
+│   ├── metrics.py         # 10 RAG Prometheus metric families
+│   ├── admin.py           # Django admin for Document model
+│   ├── services/
+│   │   ├── pdf_parser.py       # PyMuPDF text extraction
+│   │   ├── chunker.py          # Recursive paragraph→sentence→word splitting
+│   │   ├── embeddings.py       # sentence-transformers wrapper (lazy-loaded)
+│   │   ├── vector_store.py     # ChromaDB HTTP client (store, search, delete)
+│   │   ├── rag_completion.py   # Retrieval + augmentation + streaming pipeline
+│   │   └── document_processor.py # Async background ingestion orchestrator
+│   └── migrations/
+│       └── 0001_initial.py     # Document model migration
+
+static/rag/
+├── rag_chat.js            # RAG streaming with citation rendering
+├── rag_docs.js            # Document upload, polling, deletion
+└── rag.css                # RAG-specific styles (messages, citations, tables)
+
+templates/rag/
+├── chat.html              # RAG chat page with source selector + streaming output
+└── documents.html         # Upload form + document table with status badges
+
+uploads/                   # PDF uploads (bind-mounted in Docker)
+
+loadtest/                 # 9 k6 test scripts
 docs/
 ├── architecture.md       # Full architecture reference
 ├── architecture-diagram.md # Diagram spec (Mermaid + Excalidraw)
@@ -362,14 +543,15 @@ docs/
 ## Production readiness
 
 | Category | Status | Notes |
-|---|---|---|
-| Observability | 9/10 | 25 metrics, 29 Grafana panels, structured JSON logging, p50/p95/p99 latency, batching metrics |
+|---|---|---|---|
+| Observability | 9/10 | 35 metrics, 36 Grafana panels, structured JSON logging, p50/p95/p99 latency, batching metrics, RAG metrics |
 | Concurrency | 9/10 | Semaphore + queue, proper 503, queue saturation tracking, request batching (50ms window). Multi-worker needs Redis semaphore |
-| Streaming | 8/10 | SSE, CancelledError handling, timeout/unavailable errors, `[DONE]` sentinel |
+| Streaming | 9/10 | SSE, CancelledError handling, timeout/unavailable errors, `[DONE]` sentinel, RAG streaming with citation SSE events |
 | Resilience | 7/10 | Redis fail-open, graceful shutdown, restart policies. Missing: circuit breaker |
 | Security | 8/10 | HMAC-SHA256, timing-safe compare, Bearer auth, CSRF for UI, rate limiting |
 | Docker | 8/10 | Multi-stage builds, healthchecks, resource limits, restart policies |
-| Testing | 8/10 | 7 k6 scripts: streaming, non-streaming, mixed, cancellation, timeout, spike, soak |
+| RAG | 9/10 | PDF ingestion, chunking, embedding, ChromaDB retrieval, anti-hallucination prompt, source citations, 10 RAG metrics, 7 Grafana panels |
+| Testing | 8/10 | 9 k6 scripts: streaming, non-streaming, mixed, batch, step-stress, cancellation, timeout, spike, soak |
 
 ---
 

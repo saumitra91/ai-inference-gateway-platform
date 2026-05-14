@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "apps.observability",
     "apps.api_keys",
     "apps.benchmarks",
+    "apps.rag",
     "apps.dashboard",
 ]
 
@@ -163,6 +164,21 @@ INFERENCE_QUEUE_TIMEOUT_S = float(os.environ.get("INFERENCE_QUEUE_TIMEOUT_S", "3
 # Prompt safeguards
 INFERENCE_MAX_PROMPT_CHARS = _env_int("INFERENCE_MAX_PROMPT_CHARS", 100_000)
 ENABLE_CROSS_ORIGIN_OPENER_POLICY = _env_bool("ENABLE_CROSS_ORIGIN_OPENER_POLICY", default=False)
+
+# ── RAG settings ──────────────────────────────────────────────────
+RAG_ENABLED = _env_bool("RAG_ENABLED", default=True)
+RAG_CHUNK_SIZE = _env_int("RAG_CHUNK_SIZE", 500)
+RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 50)
+RAG_TOP_K = _env_int("RAG_TOP_K", 5)
+RAG_MIN_SCORE = float(os.environ.get("RAG_MIN_SCORE", "0.25"))
+RAG_EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+CHROMADB_HOST = os.environ.get("CHROMADB_HOST", "chromadb")
+CHROMADB_PORT = int(os.environ.get("CHROMADB_PORT", "8000"))
+CHROMADB_COLLECTION = os.environ.get("CHROMADB_COLLECTION", "rag_documents")
+RAG_MAX_CONTEXT_CHARS = _env_int("RAG_MAX_CONTEXT_CHARS", 8_000)
+
+MEDIA_ROOT = BASE_DIR / "uploads"
+MEDIA_URL = "/uploads/"
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:

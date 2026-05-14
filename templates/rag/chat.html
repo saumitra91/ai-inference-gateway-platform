@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}RAG Chat · Inference Control Plane{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <h1>RAG Chat</h1>
+    <p class="muted">
+      Ask questions about your uploaded documents. Responses are grounded in retrieved context and include source citations.
+    </p>
+  </header>
+
+  <section class="rag-chat-layout card">
+    <div class="rag-chat-controls">
+      <label class="field">
+        <span>Documents to search</span>
+        <div id="doc-selector" class="rag-doc-selector">
+          {% if documents %}
+            <label class="rag-doc-option">
+              <input type="checkbox" id="doc-all" checked onchange="toggleAllDocs(this)" />
+              <span>All documents</span>
+            </label>
+            {% for doc in documents %}
+              <label class="rag-doc-option">
+                <input type="checkbox" class="rag-doc-cb" value="{{ doc.id }}" checked />
+                <span>{{ doc.original_filename }}</span>
+              </label>
+            {% endfor %}
+          {% else %}
+            <p class="muted small">No processed documents available. <a href="{% url 'rag:documents' %}">Upload one</a>.</p>
+          {% endif %}
+        </div>
+      </label>
+      <label class="field">
+        <span>Message</span>
+        <textarea id="rag-user" class="input" rows="4" placeholder="Ask a question about your documents..."></textarea>
+      </label>
+      <div class="row">
+        <button id="rag-send" class="btn primary" type="button">Ask</button>
+        <button id="rag-stop" class="btn" type="button" disabled>Stop</button>
+      </div>
+      <p class="muted small">
+        Retrieves top-{{ rag_top_k }} chunks, filters at similarity &ge; 0.25, augments prompt, streams response.
+      </p>
+    </div>
+
+    <div class="rag-chat-output">
+      <div id="rag-status" class="rag-status"></div>
+      <div id="rag-conversation" class="rag-conversation"></div>
+    </div>
+  </section>
+
+  {% if not documents %}
+    <section class="card" style="margin-top:16px;">
+      <h2>No documents indexed</h2>
+      <p class="muted">
+        Upload a PDF on the <a href="{% url 'rag:documents' %}">Documents page</a>, then return here to ask questions about it.
+      </p>
+    </section>
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+  <script src="{% static 'rag/rag_chat.js' %}" defer></script>
+{% endblock %}

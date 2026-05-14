@@ -43,7 +43,11 @@
   ],
   "title": "Inference Gateway Performance",
   "description": "Real-time performance monitoring for the LLM inference gateway. Tracks concurrency, queue depth, latency distributions, token throughput, and error rates.",
-  "tags": ["inference", "llm", "performance"],
+  "tags": [
+    "inference",
+    "llm",
+    "performance"
+  ],
   "timezone": "browser",
   "editable": true,
   "refresh": "10s",
@@ -54,8 +58,26 @@
     "to": "now"
   },
   "timepicker": {
-    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m"],
-    "time_options": ["5m", "15m", "1h", "3h", "6h", "12h", "24h", "2d", "7d"]
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d"
+    ]
   },
   "templating": {
     "list": [
@@ -74,7 +96,10 @@
         "name": "mode",
         "type": "query",
         "query": "label_values(inference_chat_requests_total, mode)",
-        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
         "current": {
           "selected": true,
           "text": "All",
@@ -91,8 +116,16 @@
       "id": 1,
       "title": "Active Inference Requests",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Currently in-flight inference requests (streaming + non-streaming). Compare against INFERENCE_MAX_CONCURRENCY.",
       "options": {
         "colorMode": "background",
@@ -100,7 +133,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -115,9 +150,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 3 },
-              { "color": "red", "value": 5 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
             ]
           },
           "unit": "short",
@@ -127,7 +171,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(inference_active_requests{mode=~\"$mode\"})",
           "legendFormat": "Active",
           "refId": "A"
@@ -138,8 +185,16 @@
       "id": 2,
       "title": "Queue Depth",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Requests waiting for a concurrency slot. Non-zero means all slots are occupied.",
       "options": {
         "colorMode": "background",
@@ -147,7 +202,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -162,9 +219,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 5 },
-              { "color": "red", "value": 10 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
             ]
           },
           "unit": "short",
@@ -174,7 +240,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference_queue_depth",
           "legendFormat": "Depth",
           "refId": "A"
@@ -185,8 +254,16 @@
       "id": 3,
       "title": "Overload Rejections",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of 503 overload rejections (queue full). Should be zero in steady state.",
       "options": {
         "colorMode": "background",
@@ -194,7 +271,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["rate"],
+          "calcs": [
+            "rate"
+          ],
           "fields": "",
           "values": false
         },
@@ -209,9 +288,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.1 },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           },
           "unit": "ops",
@@ -221,7 +309,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_rejected_overload_total[$__rate_interval])",
           "legendFormat": "503/s",
           "refId": "A"
@@ -232,8 +323,16 @@
       "id": 4,
       "title": "Request Rate",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Chat completion request rate by mode.",
       "options": {
         "colorMode": "none",
@@ -241,7 +340,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -257,7 +358,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(rate(inference_chat_requests_total{mode=~\"$mode\"}[$__rate_interval]))",
           "legendFormat": "Total req/s",
           "refId": "A"
@@ -268,8 +372,16 @@
       "id": 5,
       "title": "Error Rate",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Chat completion error rate by kind. Spikes indicate upstream or infrastructure issues.",
       "options": {
         "colorMode": "background",
@@ -277,7 +389,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["rate"],
+          "calcs": [
+            "rate"
+          ],
           "fields": "",
           "values": false
         },
@@ -292,9 +406,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.05 },
-              { "color": "red", "value": 0.2 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.2
+              }
             ]
           },
           "unit": "ops",
@@ -304,7 +427,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(rate(inference_chat_completions_errors_total[$__rate_interval]))",
           "legendFormat": "Errors/s",
           "refId": "A"
@@ -315,8 +441,16 @@
       "id": 6,
       "title": "Upstream Timeouts",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of upstream (llama.cpp) timeout errors.",
       "options": {
         "colorMode": "background",
@@ -324,7 +458,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["rate"],
+          "calcs": [
+            "rate"
+          ],
           "fields": "",
           "values": false
         },
@@ -339,9 +475,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.05 },
-              { "color": "red", "value": 0.1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
             ]
           },
           "unit": "ops",
@@ -351,7 +496,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_upstream_timeouts_total[$__rate_interval])",
           "legendFormat": "Timeouts/s",
           "refId": "A"
@@ -362,12 +510,25 @@
       "id": 7,
       "title": "Active Requests & Queue Depth",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Active inference requests overlaid with queue depth. When queue depth > 0, all concurrency slots are occupied.",
       "options": {
         "legend": {
-          "calcs": ["min", "max", "mean", "last"],
+          "calcs": [
+            "min",
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -391,29 +552,56 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Queue Depth" },
+            "matcher": {
+              "id": "byName",
+              "options": "Queue Depth"
+            },
             "properties": [
-              { "id": "custom.fillOpacity", "value": 40 },
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "custom.fillOpacity",
+                "value": 40
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Active Requests" },
+            "matcher": {
+              "id": "byName",
+              "options": "Active Requests"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(inference_active_requests{mode=~\"$mode\"})",
           "legendFormat": "Active Requests",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference_queue_depth",
           "legendFormat": "Queue Depth",
           "refId": "B"
@@ -424,12 +612,24 @@
       "id": 8,
       "title": "Upstream Latency p50 / p95 / p99",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Percentile upstream (llama.cpp) latency from the upstream_wall_seconds histogram.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -453,42 +653,84 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "p99" },
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
-              { "id": "custom.lineWidth", "value": 3 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p95" },
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
-              { "id": "custom.lineWidth", "value": 2 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p50" },
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(inference_upstream_wall_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.95, sum(rate(inference_upstream_wall_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(inference_upstream_wall_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
@@ -499,12 +741,24 @@
       "id": 9,
       "title": "Time to First Token (TTFT) p50 / p95 / p99",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Time to first token distribution. High TTFT indicates prompt processing bottleneck or queue wait.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -528,40 +782,76 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "p99" },
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p95" },
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p50" },
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(inference_time_to_first_token_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.95, sum(rate(inference_time_to_first_token_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(inference_time_to_first_token_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
@@ -572,12 +862,24 @@
       "id": 10,
       "title": "Queue Wait Time p50 / p95",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Time requests spend waiting in the concurrency queue. Elevated values mean concurrency slots are saturated.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -601,41 +903,80 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "p99 Queue Wait" },
+            "matcher": {
+              "id": "byName",
+              "options": "p99 Queue Wait"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
-              { "id": "custom.lineWidth", "value": 3 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p95 Queue Wait" },
+            "matcher": {
+              "id": "byName",
+              "options": "p95 Queue Wait"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p50 Queue Wait" },
+            "matcher": {
+              "id": "byName",
+              "options": "p50 Queue Wait"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(inference_queue_wait_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50 Queue Wait",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.95, sum(rate(inference_queue_wait_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p95 Queue Wait",
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(inference_queue_wait_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99 Queue Wait",
           "refId": "C"
@@ -646,12 +987,24 @@
       "id": 11,
       "title": "Token Throughput",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Token generation throughput. Completion tokens per second from the inference_tokens_total counter.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -677,7 +1030,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_tokens_total{kind=\"completion\"}[$__rate_interval])",
           "legendFormat": "Completion tokens/s",
           "refId": "A"
@@ -688,12 +1044,24 @@
       "id": 12,
       "title": "Streaming Session Duration",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Distribution of streaming session wall-clock durations via streaming_duration_seconds histogram.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -717,41 +1085,80 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "p99 Duration" },
+            "matcher": {
+              "id": "byName",
+              "options": "p99 Duration"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
-              { "id": "custom.lineWidth", "value": 3 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p95 Duration" },
+            "matcher": {
+              "id": "byName",
+              "options": "p95 Duration"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p50 Duration" },
+            "matcher": {
+              "id": "byName",
+              "options": "p50 Duration"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(inference_streaming_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50 Duration",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.95, sum(rate(inference_streaming_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p95 Duration",
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(inference_streaming_duration_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p99 Duration",
           "refId": "C"
@@ -762,12 +1169,24 @@
       "id": 13,
       "title": "Error Rate by Kind",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Error rate broken down by kind label. Includes upstream_timeout, upstream_unavailable, upstream_http.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -793,7 +1212,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_chat_completions_errors_total[$__rate_interval])",
           "legendFormat": "{{kind}}",
           "refId": "A"
@@ -804,12 +1226,24 @@
       "id": 14,
       "title": "Request Rate by Mode",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Chat completion request rate split by mode (programmatic vs UI).",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -835,7 +1269,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_chat_requests_total{mode=~\"$mode\"}[$__rate_interval])",
           "legendFormat": "{{mode}}",
           "refId": "A"
@@ -846,12 +1283,24 @@
       "id": 15,
       "title": "Streaming In-Flight",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 38 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Currently active streaming upstream sessions. Spikes may indicate slow token generation.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -877,7 +1326,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference_streaming_requests_in_flight",
           "legendFormat": "Streaming",
           "refId": "A"
@@ -888,12 +1340,24 @@
       "id": 16,
       "title": "Validation & Rejection Rate",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 38 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of requests rejected by validation or policy (malformed JSON, schema errors, prompt too long).",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -919,13 +1383,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_validation_errors_total[$__rate_interval])",
           "legendFormat": "{{kind}}",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_rejected_requests_total[$__rate_interval])",
           "legendFormat": "{{reason}}",
           "refId": "B"
@@ -936,12 +1406,24 @@
       "id": 17,
       "title": "Rate Limit & Quota Hits",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 38 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of rate limit (429) and quota (429) rejections.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -967,13 +1449,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_rate_limit_exceeded_total[$__rate_interval])",
           "legendFormat": "Rate limited",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_quota_exceeded_total[$__rate_interval])",
           "legendFormat": "Quota exceeded",
           "refId": "B"
@@ -984,12 +1472,24 @@
       "id": 18,
       "title": "Django Process Health",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 38 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 38
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Django worker RSS and CPU. Spikes may indicate memory leaks or excessive concurrent streaming.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1011,31 +1511,58 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "RSS (GB)" },
+            "matcher": {
+              "id": "byName",
+              "options": "RSS (GB)"
+            },
             "properties": [
-              { "id": "unit", "value": "decgbytes" },
-              { "id": "min", "value": 0 }
+              {
+                "id": "unit",
+                "value": "decgbytes"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "CPU %" },
+            "matcher": {
+              "id": "byName",
+              "options": "CPU %"
+            },
             "properties": [
-              { "id": "unit", "value": "percent" },
-              { "id": "min", "value": 0 },
-              { "id": "max", "value": 100 }
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "django_process_resident_memory_bytes / 1073741824",
           "legendFormat": "RSS (GB)",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "django_process_cpu_percent",
           "legendFormat": "CPU %",
           "refId": "B"
@@ -1046,8 +1573,16 @@
       "id": 19,
       "title": "Queue Saturation",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Queue depth as a fraction of max queue size. 100% means queue is full and new requests get 503.",
       "options": {
         "colorMode": "background",
@@ -1055,7 +1590,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1070,9 +1607,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.5 },
-              { "color": "red", "value": 0.9 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
             ]
           },
           "unit": "percentunit",
@@ -1083,7 +1629,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference:queue_saturation:1m",
           "legendFormat": "Queue Saturation",
           "refId": "A"
@@ -1094,8 +1643,16 @@
       "id": 20,
       "title": "Error Ratio",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 4,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Fraction of requests that result in errors. Should be below 5%.",
       "options": {
         "colorMode": "background",
@@ -1103,7 +1660,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["rate"],
+          "calcs": [
+            "rate"
+          ],
           "fields": "",
           "values": false
         },
@@ -1118,9 +1677,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 0.05 },
-              { "color": "red", "value": 0.1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
             ]
           },
           "unit": "percentunit",
@@ -1131,7 +1699,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(rate(inference_chat_completions_errors_total[$__rate_interval])) / sum(rate(inference_chat_requests_total[$__rate_interval]) + 1)",
           "legendFormat": "Error Ratio",
           "refId": "A"
@@ -1142,12 +1713,24 @@
       "id": 21,
       "title": "Gateway Process Health",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Gateway process RSS, CPU, and uptime. Memory growth under load may indicate leaks.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1169,43 +1752,79 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "RSS (GB)" },
+            "matcher": {
+              "id": "byName",
+              "options": "RSS (GB)"
+            },
             "properties": [
-              { "id": "unit", "value": "decgbytes" },
-              { "id": "min", "value": 0 }
+              {
+                "id": "unit",
+                "value": "decgbytes"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "CPU %" },
+            "matcher": {
+              "id": "byName",
+              "options": "CPU %"
+            },
             "properties": [
-              { "id": "unit", "value": "percent" },
-              { "id": "min", "value": 0 },
-              { "id": "max", "value": 100 }
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Uptime (hours)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Uptime (hours)"
+            },
             "properties": [
-              { "id": "unit", "value": "dtdhms" }
+              {
+                "id": "unit",
+                "value": "dtdhms"
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "gateway_process_resident_memory_bytes / 1073741824",
           "legendFormat": "RSS (GB)",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "gateway_process_cpu_percent",
           "legendFormat": "CPU %",
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "gateway_process_uptime_seconds",
           "legendFormat": "Uptime (hours)",
           "refId": "C"
@@ -1216,12 +1835,24 @@
       "id": 22,
       "title": "Overload & Timeout Rate",
       "type": "timeseries",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of overload rejections (503) and upstream timeouts (504).",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1245,28 +1876,52 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Overload/s" },
+            "matcher": {
+              "id": "byName",
+              "options": "Overload/s"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Timeouts/s" },
+            "matcher": {
+              "id": "byName",
+              "options": "Timeouts/s"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_rejected_overload_total[$__rate_interval])",
           "legendFormat": "Overload/s",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_upstream_timeouts_total[$__rate_interval])",
           "legendFormat": "Timeouts/s",
           "refId": "B"
@@ -1277,13 +1932,23 @@
       "id": 23,
       "title": "TTFT Heatmap",
       "type": "heatmap",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 50 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Time-to-first-token distribution over time. Brighter regions indicate higher request density at that latency range.",
       "options": {
         "calculate": false,
         "calculation": {
-          "yBuckets": { "mode": "bucket" }
+          "yBuckets": {
+            "mode": "bucket"
+          }
         },
         "cellGap": 1,
         "color": {
@@ -1302,13 +1967,19 @@
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "scaleDistribution": { "type": "log", "log": 2 }
+            "scaleDistribution": {
+              "type": "log",
+              "log": 2
+            }
           }
         }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(rate(inference_time_to_first_token_seconds_bucket[$__rate_interval])) by (le)",
           "legendFormat": "{{le}}",
           "refId": "A"
@@ -1319,8 +1990,16 @@
       "id": 24,
       "title": "Batch Queue Depth",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 58 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Requests currently waiting in the batch barrier. Non-zero means batching is active.",
       "options": {
         "colorMode": "background",
@@ -1328,7 +2007,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1343,9 +2024,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 4 },
-              { "color": "red", "value": 8 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 8
+              }
             ]
           },
           "unit": "short",
@@ -1355,7 +2045,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference_batch_queue_depth",
           "legendFormat": "Depth",
           "refId": "A"
@@ -1366,8 +2059,16 @@
       "id": 25,
       "title": "Batch Efficiency",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 58 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 4,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Cumulative batching efficiency. 0 = all single-request batches, approaches 1 as batches grow.",
       "options": {
         "colorMode": "background",
@@ -1375,7 +2076,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1390,9 +2093,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.3 },
-              { "color": "green", "value": 0.7 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
             ]
           },
           "unit": "percentunit",
@@ -1403,7 +2115,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "inference_batch_efficiency",
           "legendFormat": "Efficiency",
           "refId": "A"
@@ -1414,8 +2129,16 @@
       "id": 26,
       "title": "Avg Batch Size",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 58 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 8,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Average number of requests per batch (5m rolling). Higher is better for throughput.",
       "options": {
         "colorMode": "background",
@@ -1423,7 +2146,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1438,9 +2163,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 2 },
-              { "color": "green", "value": 4 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "green",
+                "value": 4
+              }
             ]
           },
           "unit": "short",
@@ -1450,7 +2184,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_batch_size_sum[$__rate_interval]) / (rate(inference_batch_size_count[$__rate_interval]) + 1)",
           "legendFormat": "Avg Size",
           "refId": "A"
@@ -1461,8 +2198,16 @@
       "id": 27,
       "title": "Batch Dispatch Rate",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 58 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 12,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Rate of batch dispatches per second. Single-request batches show batching overhead.",
       "options": {
         "colorMode": "none",
@@ -1470,7 +2215,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1486,13 +2233,19 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_batch_dispatches_total[$__rate_interval])",
           "legendFormat": "Batches/s",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_batch_single_dispatches_total[$__rate_interval])",
           "legendFormat": "Singles/s",
           "refId": "B"
@@ -1503,12 +2256,24 @@
       "id": 28,
       "title": "Batch Size Over Time",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Batch size distribution over time from the batch_size histogram.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1532,17 +2297,32 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Avg Batch Size" },
+            "matcher": {
+              "id": "byName",
+              "options": "Avg Batch Size"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } },
-              { "id": "custom.lineWidth", "value": 3 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "rate(inference_batch_size_sum[$__rate_interval]) / (rate(inference_batch_size_count[$__rate_interval]) + 1)",
           "legendFormat": "Avg Batch Size",
           "refId": "A"
@@ -1553,12 +2333,24 @@
       "id": 29,
       "title": "Batch Wait Time p50 / p95",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Time requests spend waiting in the batch barrier before upstream dispatch.",
       "options": {
         "legend": {
-          "calcs": ["max", "mean", "last"],
+          "calcs": [
+            "max",
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -1582,33 +2374,409 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "p95" },
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "p50" },
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
             ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(inference_batch_wait_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "histogram_quantile(0.95, sum(rate(inference_batch_wait_seconds_bucket[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         }
       ]
+    },
+    {
+      "id": 30,
+      "title": "RAG Request Rate",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rag_completions_total[$__rate_interval]))",
+          "legendFormat": "RAG req/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "RAG-augmented chat completion rate"
+    },
+    {
+      "id": 31,
+      "title": "RAG Hallucination Fallbacks",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(rag_hallucination_fallbacks_total[$__rate_interval]))",
+          "legendFormat": "fallbacks",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "orange",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Times the model said 'not found in documents' \u2014 low retrieval confidence"
+    },
+    {
+      "id": 32,
+      "title": "Documents Ready",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "rag_documents_ready",
+          "legendFormat": "docs",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Documents successfully indexed and ready for querying"
+    },
+    {
+      "id": 33,
+      "title": "Ingestion & Chunks Rate",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "rate(rag_documents_uploaded_total[$__rate_interval])",
+          "legendFormat": "uploads/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "purple",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Document upload rate"
+    },
+    {
+      "id": 34,
+      "title": "Retrieval Latency p50 / p95",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(rag_retrieval_latency_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_latency_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Time to embed query + search ChromaDB + filter results"
+    },
+    {
+      "id": 35,
+      "title": "Avg Chunks Retrieved per Query",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 54
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "rate(rag_retrieved_chunks_per_query_sum[$__rate_interval]) / (rate(rag_retrieved_chunks_per_query_count[$__rate_interval]) + 1)",
+          "legendFormat": "avg chunks",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Average number of chunks returned per RAG query"
+    },
+    {
+      "id": 36,
+      "title": "Ingestion Duration",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 54
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rag_ingestion_duration_seconds_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Time to fully process a document (extract, chunk, embed, store)"
     }
   ]
 }

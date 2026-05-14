@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Documents · RAG Pipeline{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <h1>RAG Documents</h1>
+    <p class="muted">
+      Upload PDFs for indexing. After processing completes, you can ask questions about them in the
+      <a href="{% url 'rag:chat' %}">RAG Chat</a>.
+    </p>
+  </header>
+
+  <section class="card" style="margin-bottom:16px;">
+    <h2>Upload PDF</h2>
+    <div class="rag-upload-form">
+      <input type="file" id="rag-file-input" accept=".pdf" class="input" style="margin-bottom:8px;" />
+      <button id="rag-upload-btn" class="btn primary" type="button">Upload and Index</button>
+      <span id="rag-upload-status" class="rag-upload-status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Documents</h2>
+    <div id="rag-doc-list">
+      <p class="muted">Loading...</p>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+  <script src="{% static 'rag/rag_docs.js' %}" defer></script>
+{% endblock %}

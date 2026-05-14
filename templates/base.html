@@ -7,6 +7,7 @@
     <title>{% block title %}Inference Control Plane{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <link rel="stylesheet" href="{% static 'dashboard/theme.css' %}" />
+    <link rel="stylesheet" href="{% static 'rag/rag.css' %}" />
   </head>
   <body>
     <div class="layout">
@@ -15,6 +16,8 @@
         <nav class="nav">
           <a href="{% url 'dashboard:home' %}">Overview</a>
           <a href="{% url 'dashboard:chat' %}">Chat</a>
+          <a href="{% url 'rag:chat' %}">RAG Chat</a>
+          <a href="{% url 'rag:documents' %}">RAG Documents</a>
           {% if user.is_staff %}
             <a href="{% url 'dashboard:api_keys_create' %}">API keys</a>
           {% endif %}
