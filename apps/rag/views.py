@@ -194,7 +194,7 @@ async def rag_chat_completions(request: HttpRequest) -> HttpResponse:
     )
 
 
-@require_GET
+@require_POST
 @login_required
 def rag_document_delete(request: HttpRequest, doc_id: str) -> JsonResponse:
     try:

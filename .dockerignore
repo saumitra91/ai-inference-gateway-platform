@@ -1,0 +1,11 @@
+models/
+uploads/
+staticfiles/
+.git/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+*.md
+docs/
+loadtest/
