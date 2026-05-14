@@ -201,43 +201,74 @@ A production-style Retrieval-Augmented Generation system integrated into the exi
 
 **Architecture:**
 
-```
-User uploads PDF → Django saves file + creates Document record
-                         ↓
-              Background task (asyncio.create_task):
-                PyMuPDF → extract text page-by-page
-                     ↓
-                Recursive chunker → paragraph → sentence → word fallback
-                  Configurable: chunk_size=500, chunk_overlap=50
-                     ↓
-                sentence-transformers/all-MiniLM-L6-v2 → 384-dim embeddings
-                     ↓
-                ChromaDB HTTP client → store with metadata (doc_id, page, chunk_index)
-                     ↓
-                Document.status = ready
+```mermaid
+---
+title: RAG Pipeline
+---
+flowchart TB
+    subgraph Client["Browser"]
+        UI["RAG Chat UI rag_chat.js"]
+        DOC["RAG Docs UI rag_docs.js"]
+    end
 
-User asks question → Django RAG Chat UI → POST /rag/api/completions
-                         ↓
-              Embed query via sentence-transformers
-                     ↓
-              ChromaDB similarity search (cosine, top_k=5)
-                     ↓
-              Filter by confidence threshold (min_score=0.25)
-                     ↓
-              If no chunks above threshold:
-                → Return "I could not find this information in the uploaded documents."
-                → Increment rag_hallucination_fallbacks_total
-                     ↓
-              Build augmented prompt:
-                System: "Answer using ONLY this context. If not found, say so."
-                Context: [Source: doc.pdf, page 3] ...text...
-                Messages: [user's conversation history]
-                     ↓
-              Stream to llama.cpp via existing LlamaCppBackend
-                     ↓
-              SSE events sent: rag_metadata (citations) → token stream → [DONE]
-                     ↓
-              Frontend renders citations as badges: [doc_id… p.3]
+    subgraph Django["Django ASGI :8000"]
+        direction TB
+        UPL["rag_document_upload\nPOST /api/documents/upload"]
+        PROC["process_document\nThreadPoolExecutor"]
+        CHAT["rag_chat_completions\nPOST /api/completions"]
+        AUG["build_augmented_prompt"]
+        STREAM["rag_completion_stream\nAsyncGenerator"]
+
+        subgraph Ingest["Ingestion Pipeline"]
+            EXTRACT["extract_text\nPyMuPDF fitz"]
+            CHUNK["chunk_pages\n500 chars · 50 overlap\nparagraph→sentence→word"]
+            EMBED["embed_texts\nsentence-transformers\nall-MiniLM-L6-v2 · 384d"]
+            STORE["store_chunks\nbatch_size=100"]
+        end
+
+        subgraph Retrieve["Retrieval Pipeline"]
+            QEMBED["embed_query"]
+            SEARCH["search_chunks\ncosine similarity · top_k=5"]
+            FILTER["score ≥ RAG_MIN_SCORE\n0.25 threshold"]
+        end
+    end
+
+    subgraph ChromaDB["ChromaDB :8000"]
+        COLL["rag_documents\nhnsw:space=cosine"]
+    end
+
+    subgraph LLM["llama.cpp :8080"]
+        INFER["POST /v1/chat/completions\nstream=true"]
+    end
+
+    subgraph Storage["PostgreSQL :5432"]
+        DOCS["Document model\nUUID PK · status · chunk_count"]
+    end
+
+    %% Ingestion flow
+    DOC -->|"POST multipart/form-data"| UPL
+    UPL -->|"save file + Document(UPLOADED)"| DOCS
+    UPL -->|"asyncio.ensure_future"| PROC
+    PROC --> EXTRACT
+    EXTRACT -->|"ParsedDocument(pages)"| CHUNK
+    CHUNK -->|"list[Chunk]"| EMBED
+    EMBED -->|"list[list[float]]"| STORE
+    STORE -->|"collection.add()"| COLL
+    COLL -->|"status=READY"| DOCS
+
+    %% Inference flow
+    UI -->|"POST /rag/api/completions\n{messages, document_ids}"| CHAT
+    CHAT --> STREAM
+    STREAM --> QEMBED
+    QEMBED -->|"query_embedding"| SEARCH
+    SEARCH -->|"query(n_results=top_k)"| COLL
+    COLL -->|"documents + distances"| SEARCH
+    SEARCH -->|"chunks with scores"| FILTER
+    FILTER -->|"chunks ≥ 0.25"| AUG
+    FILTER -->|"no chunks → hallucination fallback"| STREAM
+    AUG -->|"system prompt + context + messages"| INFER
+    INFER -->|"SSE data: {...}\ndata: [DONE]"| STREAM
+    STREAM -->|"rag_metadata + tokens + citations"| UI
 ```
 
 **Anti-Hallucination Strategy:**
@@ -532,10 +563,11 @@ uploads/                   # PDF uploads (bind-mounted in Docker)
 
 loadtest/                 # 9 k6 test scripts
 docs/
-├── architecture.md       # Full architecture reference
-├── architecture-diagram.md # Diagram spec (Mermaid + Excalidraw)
-├── performance.md        # Tuning guide and bottleneck analysis
-└── load-testing.md       # k6 usage guide and scenario reference
+├── architecture.md           # Full architecture reference
+├── architecture-diagram.md   # Diagram spec (Mermaid + Excalidraw)
+├── rag-architecture.md       # Detailed RAG pipeline architecture
+├── performance.md            # Tuning guide and bottleneck analysis
+└── load-testing.md           # k6 usage guide and scenario reference
 ```
 
 ---
