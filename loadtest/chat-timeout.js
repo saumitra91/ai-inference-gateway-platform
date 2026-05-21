@@ -12,6 +12,7 @@ import { Rate, Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:8888';
 const API_KEY = __ENV.K6_API_KEY || '';
+const BACKEND = __ENV.K6_BACKEND || '';
 
 const errorRate = new Rate('timeout_errors');
 const healthyCount = new Counter('healthy_checks');
@@ -49,6 +50,7 @@ export default function () {
       max_tokens: 2048,
       stream: false,
       temperature: 0.7,
+      ...(BACKEND ? { backend: BACKEND } : {}),
     });
 
     const headers = { 'Content-Type': 'application/json' };
@@ -72,6 +74,7 @@ export default function () {
       max_tokens: 16,
       stream: false,
       temperature: 0.7,
+      ...(BACKEND ? { backend: BACKEND } : {}),
     });
 
     const headers = { 'Content-Type': 'application/json' };

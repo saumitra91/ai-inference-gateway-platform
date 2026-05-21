@@ -139,11 +139,12 @@ flowchart LR
 
 ### Backend selection (multi-backend routing)
 
-Requests can target either backend via three mechanisms (checked in order):
+Requests can target either backend via four mechanisms (checked in order):
 
 1. **Request body `"backend"` field**: `{"backend": "vllm", ...}`
 2. **HTTP header**: `X-Inference-Backend: vllm`
 3. **Model name mapping**: `llama-local` → llama.cpp, `llama-vllm` → vLLM
+4. **Frontend chat UI** — dropdown selector at `http://localhost:8888/chat/`
 
 If none are provided, the `DEFAULT_BACKEND` setting (default `"llamacpp"`) is used.
 
@@ -179,11 +180,12 @@ The backend field is stripped from the payload before forwarding upstream — ne
 - Format: `sk_local_{public_id}_{secret}` (128-bit + 256-bit entropy)
 
 ### Multi-Backend Routing
-- **Backend selection**: `backend` field in request body, `X-Inference-Backend` header, or model name mapping
+- **Backend selection**: `backend` field in request body, `X-Inference-Backend` header, model name mapping, or frontend chat UI dropdown
 - **Model mapping**: `llama-local` → llama.cpp, `llama-vllm` → vLLM
 - **Default backend**: Configurable via `DEFAULT_BACKEND` (default `"llamacpp"`)
 - **Transparent proxying**: The `backend` field is stripped before forwarding upstream
 - **Django integration**: RAG pipeline and UI chat support backend selection via `DEFAULT_INFERENCE_BACKEND`
+- **Frontend selector**: Dropdown at `http://localhost:8888/chat/` lets users switch between llama.cpp and vLLM per request
 
 ### Request Batching
 - **Dispatch-time batching** — concurrent requests arriving within a configurable window (default 50ms) are released simultaneously
@@ -640,7 +642,7 @@ Nine profiling scripts + 3 benchmark scripts in `loadtest/`:
 ### Benchmark scripts (llama.cpp vs vLLM)
 
 | Script | Description | Default VUs | Duration |
-|---|---|---|---|
+|---|---|---|---|---|
 | `benchmark-llamacpp.js` | All requests routed to llama.cpp via `backend: "llamacpp"` | 4 | 5m |
 | `benchmark-vllm.js` | All requests routed to vLLM via `backend: "vllm"` | 4 | 5m |
 | `benchmark-headtohead.js` | Alternates between both backends — half VUs per backend | 6 (3+3) | 5m |
@@ -653,11 +655,41 @@ K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-vllm.js
 # Run head-to-head comparison (produces side-by-side metrics)
 K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-headtohead.js
 
+# Override the default backend in a benchmark (e.g. benchmark llamacpp against vllm)
+K6_API_KEY="sk_local_..." K6_BACKEND=vllm k6 run loadtest/benchmark-llamacpp.js
+
+# Customize backends in head-to-head comparison
+K6_API_KEY="sk_local_..." K6_BACKEND_A=vllm K6_BACKEND_B=llamacpp k6 run loadtest/benchmark-headtohead.js
+
 # Customize concurrency and duration
 K6_API_KEY="sk_local_..." K6_VUS=8 K6_DURATION="10m" k6 run loadtest/benchmark-headtohead.js
 ```
 
-All scripts support `K6_API_KEY`, `K6_BASE_URL`, `K6_VUS` env vars. Benchmark scripts use the `backend` field to route requests to the correct inference backend.
+### Backend switching
+
+All 12 load test scripts accept `K6_BACKEND` to target a specific backend:
+
+```bash
+# Route profiling traffic to vLLM instead of the default
+K6_API_KEY="sk_local_..." K6_BACKEND=vllm k6 run loadtest/chat-streaming.js
+
+# Route to llama.cpp explicitly
+K6_API_KEY="sk_local_..." K6_BACKEND=llamacpp k6 run loadtest/chat-streaming.js
+```
+
+When unset, the request uses the gateway's `DEFAULT_BACKEND` (configurable via `default_backend` in the gateway settings).
+
+### Environment variables
+
+| Variable | Scripts | Default | Description |
+|---|---|---|---|
+| `K6_API_KEY` | All | — | Bearer token for API key auth (required) |
+| `K6_BASE_URL` | All | `http://localhost:8888` | Target gateway URL |
+| `K6_VUS` | All | varies by script | Virtual users / concurrency level |
+| `K6_DURATION` | Varies | varies by script | Test duration |
+| `K6_BACKEND` | All profiling, benchmarks | gateway default | Target backend: `llamacpp` or `vllm` |
+| `K6_BACKEND_A` | `benchmark-headtohead` | `llamacpp` | First backend in head-to-head comparison |
+| `K6_BACKEND_B` | `benchmark-headtohead` | `vllm` | Second backend in head-to-head comparison |
 
 ---
 

@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.6.3
+FROM vllm/vllm-openai-cpu:v0.21.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \

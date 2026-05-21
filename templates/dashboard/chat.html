@@ -17,6 +17,14 @@
         <input id="model" class="input" value="default" autocomplete="off" />
       </label>
       <label class="field">
+        <span>Backend</span>
+        <select id="backend" class="input">
+          <option value="">Gateway default</option>
+          <option value="llamacpp">llama.cpp</option>
+          <option value="vllm">vLLM</option>
+        </select>
+      </label>
+      <label class="field">
         <span>System prompt</span>
         <textarea id="system" class="input" rows="3">You are a concise engineering assistant.</textarea>
       </label>

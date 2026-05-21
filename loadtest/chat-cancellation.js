@@ -13,6 +13,7 @@ import { Rate, Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:8888';
 const API_KEY = __ENV.K6_API_KEY || '';
+const BACKEND = __ENV.K6_BACKEND || '';
 
 const cancelErrors = new Rate('cancel_errors');
 const gatewayOk = new Counter('gateway_healthy_checks');
@@ -56,6 +57,7 @@ export default function () {
       max_tokens: 256,
       stream: true,
       temperature: 0.7,
+      ...(BACKEND ? { backend: BACKEND } : {}),
     });
 
     const headers = { 'Content-Type': 'application/json' };

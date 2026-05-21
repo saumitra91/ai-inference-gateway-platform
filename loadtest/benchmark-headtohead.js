@@ -9,6 +9,8 @@
 //   K6_BASE_URL    - Gateway URL (default http://localhost:8888)
 //   K6_VUS         - Concurrent VUs (default 6 — 3 per backend)
 //   K6_DURATION    - Test duration (default 5m)
+//   K6_BACKEND_A   - First backend name (default: llamacpp)
+//   K6_BACKEND_B   - Second backend name (default: vllm)
 
 import http from "k6/http";
 import { check, sleep } from "k6";
@@ -28,8 +30,11 @@ const USER_PROMPTS = [
   "List three benefits of functional programming.",
 ];
 
-// Half the VUs target llama.cpp, half target vLLM
-const BACKEND = __VU <= (VUS / 2) ? "llamacpp" : "vllm";
+const BACKEND_A = __ENV.K6_BACKEND_A || "llamacpp";
+const BACKEND_B = __ENV.K6_BACKEND_B || "vllm";
+
+// Half the VUs target backend A, half target backend B
+const BACKEND = __VU <= (VUS / 2) ? BACKEND_A : BACKEND_B;
 
 // llama.cpp metrics
 const l_ttft = new Trend("head2head_llamacpp_ttft_ms", true);

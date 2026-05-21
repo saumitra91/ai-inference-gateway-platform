@@ -95,7 +95,8 @@ set -- \
     --port "${VLLM_PORT}" \
     --dtype "${VLLM_DTYPE}" \
     --max-model-len "${VLLM_MAX_MODEL_LEN}" \
-    --served-model-name vllm-model
+    --served-model-name vllm-model \
+    --served-model-name default
 
 if [ -n "${VLLM_DEVICE}" ]; then
     set -- "$@" --device "${VLLM_DEVICE}"
