@@ -221,7 +221,7 @@ REQUEST_ID_HEADER = os.environ.get("REQUEST_ID_HEADER", "X-Request-ID")
 LLAMA_CPP_BASE_URL = os.environ.get("LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080")
 
 # vLLM OpenAI-compatible HTTP server.
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8005")
 
 DEFAULT_INFERENCE_BACKEND = os.environ.get("DEFAULT_INFERENCE_BACKEND", "llamacpp")
 

@@ -29,26 +29,24 @@ services:
       context: ./deploy/llamacpp
       dockerfile: Dockerfile
       args:
-        LLAMA_CPP_RELEASE: b9106
-    image: local/llamacpp:b9106
+        LLAMA_CPP_RELEASE: b9263
+    image: local/llamacpp:b9263
+    runtime: nvidia
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
       MODEL_PATH: /models/model.gguf
       CONTEXT_SIZE: "4096"
-      # NUM_THREADS: set to "auto" to detect at runtime, or pin explicitly.
-      # Rule of thumb: pin to (physical_cores - 1) for best throughput on a
-      # shared machine; overcommitting threads causes context-switch thrash.
       NUM_THREADS: "auto"
       HOST: "0.0.0.0"
       PORT: "8080"
       # EXTRA_ARGS: space-separated additional flags, e.g. "--no-mmap --flash-attn"
+      # --n-gpu-layers: offload layers to GPU.  99 = offload all layers.
       # --parallel: llama.cpp parallel slots.  Must match inference_max_concurrency.
-      #   Each slot consumes ctx-size / parallel tokens of KV cache.  At 8192 ctx / 4 slots,
-      #   each slot gets 2048 tokens ÷ ~450 MB per 4096 tokens of KV (3B model) = ~900 MB × 4 = 3.6 GB.
-      #   --ctx-size 8192 gives enough headroom for RAG prompts (~1500 tokens per request).
-      #   KV cache math: 820 MB per 4096-token slot for a 3B model.  4 slots × ~820 MB × (8192/4096) = ~6.6 GB.
+      #   Each slot consumes ctx-size / parallel tokens of KV cache.
       # --batch-size / --ubatch-size: prompt-token batch for the prefill phase
       #   Larger = faster prompt processing for concurrent requests
-      EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512 --ctx-size 8192"
+      EXTRA_ARGS: "--n-gpu-layers 99 --parallel 4 --batch-size 1024 --ubatch-size 512 --ctx-size 8192"
     volumes:
       - ./models:/models:ro
     expose:
@@ -61,6 +59,13 @@ services:
       start_period: 120s
     mem_limit: 12g
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   vllm:
     build:
@@ -75,18 +80,20 @@ services:
         required: false
     environment:
       NVIDIA_VISIBLE_DEVICES: all
-      VLLM_MODEL_PATH: Qwen/Qwen2.5-3B-Instruct
+      VLLM_MODEL_PATH: Qwen/Qwen2.5-3B-Instruct-AWQ
       VLLM_DEVICE: cuda
       VLLM_HOST: "0.0.0.0"
-      VLLM_PORT: "8000"
+      VLLM_PORT: "8005"
       VLLM_DTYPE: ${VLLM_DTYPE:-auto}
       VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-4096}
-      VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.90}
-      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 256 --enable-chunked-prefill}
+      VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.75}
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 64 --enable-chunked-prefill --quantization awq_marlin --enforce-eager}
     expose:
-      - "8000"
+      - "8005"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8005/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -113,7 +120,7 @@ services:
       DATABASE_URL: postgres://platform:platform@postgres:5432/platform
       REDIS_URL: redis://redis:6379/0
       UPSTREAM_LLAMA_URL: http://llamacpp:8080
-      UPSTREAM_VLLM_URL: http://vllm:8000
+      UPSTREAM_VLLM_URL: http://vllm:8005
       DEFAULT_BACKEND: ${DEFAULT_BACKEND:-llamacpp}
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
@@ -151,7 +158,7 @@ services:
       USE_REDIS: "true"
       LLAMA_CPP_BASE_URL: http://llamacpp:8080
       READINESS_INCLUDE_LLAMA: "true"
-      CSRF_TRUSTED_ORIGINS: http://localhost:8888,http://127.0.0.1:8888
+      CSRF_TRUSTED_ORIGINS: http://localhost:8888,http://127.0.0.1:8888,http://192.168.1.19:8888
     command: >
       sh -c "python manage.py collectstatic --noinput &&
              python manage.py migrate --noinput &&

@@ -1,20 +1,17 @@
-# llama.cpp runtime — prebuilt CPU binaries from GitHub releases (no source compile).
+# llama.cpp runtime — prebuilt GPU-enabled binaries from GitHub releases.
 #
-# Why prebuilts in Docker (especially on Apple Silicon)?
-#   • Source builds with GGML_NATIVE / aggressive SIMD flags have repeatedly
-#     broken under QEMU/virtio and mixed ARM feature levels. Official release
-#     tarballs are built on stable Ubuntu CI matrices and are the lowest-friction
-#     path for reproducible local + Hetzner amd64 deployments.
-#   • The release tag (LLAMA_CPP_RELEASE) is immutable; the download URL is
-#     deterministic for CI caches and security review.
+# Uses Vulkan-backend binaries for NVIDIA GPU support via the NVIDIA
+# container runtime.  Vulkan performs within ~5-10 % of native CUDA
+# on NVIDIA hardware and is the only GPU-backend the upstream project
+# publishes prebuilt Linux tarballs for.
 #
 # Architecture mapping (Docker TARGETARCH from BuildKit):
-#   arm64  → llama-<tag>-bin-ubuntu-arm64.tar.gz   (Linux/arm64 — Docker Desktop on Mac)
-#   amd64  → llama-<tag>-bin-ubuntu-x64.tar.gz     (Linux/x86_64 — Hetzner, etc.)
+#   arm64  → llama-<tag>-bin-ubuntu-vulkan-arm64.tar.gz
+#   amd64  → llama-<tag>-bin-ubuntu-vulkan-x64.tar.gz
 
 FROM ubuntu:24.04
 
-ARG LLAMA_CPP_RELEASE=b9106
+ARG LLAMA_CPP_RELEASE=b9263
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,12 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     findutils \
     libgomp1 \
+    libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      arm64) SUFFIX="ubuntu-arm64" ;; \
-      amd64) SUFFIX="ubuntu-x64" ;; \
+      arm64) SUFFIX="ubuntu-vulkan-arm64" ;; \
+      amd64) SUFFIX="ubuntu-vulkan-x64" ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RELEASE}/llama-${LLAMA_CPP_RELEASE}-bin-${SUFFIX}.tar.gz"; \

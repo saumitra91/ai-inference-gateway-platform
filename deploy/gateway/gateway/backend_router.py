@@ -10,6 +10,7 @@ BackendName = Literal["llamacpp", "vllm"]
 MODEL_TO_BACKEND: dict[str, BackendName] = {
     "llama-local": "llamacpp",
     "llama-vllm": "vllm",
+    "vllm-model": "vllm",
 }
 
 
