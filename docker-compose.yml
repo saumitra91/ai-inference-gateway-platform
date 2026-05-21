@@ -75,7 +75,7 @@ services:
         required: false
     environment:
       NVIDIA_VISIBLE_DEVICES: all
-      VLLM_MODEL_PATH: /vllm-model
+      VLLM_MODEL_PATH: Qwen/Qwen2.5-3B-Instruct
       VLLM_DEVICE: cuda
       VLLM_HOST: "0.0.0.0"
       VLLM_PORT: "8000"
