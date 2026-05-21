@@ -72,7 +72,7 @@ services:
       - path: .env
         required: false
     environment:
-      VLLM_MODEL_PATH: Qwen/Qwen2.5-3B-Instruct
+      VLLM_MODEL_PATH: /vllm-model
       VLLM_DEVICE: ${VLLM_DEVICE:-cpu}
       VLLM_HOST: "0.0.0.0"
       VLLM_PORT: "8000"
