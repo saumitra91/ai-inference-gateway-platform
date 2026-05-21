@@ -29,6 +29,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     user: str | None = Field(default=None, max_length=256)
+    backend: str | None = Field(default=None, max_length=32)
 
     @field_validator("messages")
     @classmethod
@@ -72,5 +73,7 @@ class ChatCompletionRequest(BaseModel):
             self.top_p = max(0.0, min(self.top_p, 1.0))
 
     def to_upstream_payload(self) -> dict[str, object]:
-        """Serialize to JSON-compatible dict for llama.cpp's OpenAI server."""
-        return self.model_dump(exclude_none=True, mode="json")
+        """Serialize to JSON-compatible dict, stripping internal routing fields."""
+        payload = self.model_dump(exclude_none=True, mode="json")
+        payload.pop("backend", None)
+        return payload

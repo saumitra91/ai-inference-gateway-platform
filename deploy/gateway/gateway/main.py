@@ -17,6 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from redis.asyncio import Redis
 from redis.asyncio import from_url as redis_from_url
 
+from gateway.backend_router import BackendName, backend_url, resolve_backend, strip_backend_field
 from gateway.batcher import BatchBarrier
 from gateway.concurrency import acquire_slot as acquire_concurrency_slot
 from gateway.concurrency import release_slot as release_concurrency_slot
@@ -32,6 +33,19 @@ from gateway.metrics import (
     BATCH_SIZE,
     BATCH_SINGLE_COUNT,
     BATCH_WAIT_SECONDS,
+    BACKEND_ACTIVE_REQUESTS,
+    BACKEND_BYTES_TOTAL,
+    BACKEND_CHAT_COMPLETIONS_NONSTREAMING,
+    BACKEND_CHAT_COMPLETIONS_STREAMING,
+    BACKEND_CHAT_COMPLETION_ERRORS,
+    BACKEND_CHAT_REQUESTS,
+    BACKEND_REJECTED_OVERLOAD,
+    BACKEND_STREAMING_DURATION_SECONDS,
+    BACKEND_STREAMING_IN_FLIGHT,
+    BACKEND_STREAM_TOKENS,
+    BACKEND_TTFT_SECONDS,
+    BACKEND_UPSTREAM_LATENCY_SECONDS,
+    BACKEND_UPSTREAM_TIMEOUTS,
     CHAT_COMPLETIONS_NONSTREAMING,
     CHAT_COMPLETIONS_STREAMING,
     CHAT_COMPLETION_ERRORS,
@@ -60,12 +74,6 @@ REQUESTS = Counter(
     "HTTP requests handled by the FastAPI gateway",
     labelnames=("route", "status"),
 )
-UPSTREAM_SECONDS = Histogram(
-    "gateway_upstream_seconds",
-    "Upstream llama-server wall time",
-    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
-)
-STREAM_BYTES = Counter("gateway_stream_bytes_total", "Bytes streamed from upstream to clients")
 
 
 class _State:
@@ -110,7 +118,8 @@ async def lifespan(app: FastAPI):
         on_flush=_on_batch_flush,
         queue_depth_gauge=BATCH_QUEUE_DEPTH,
     )
-    log.info("level=info event=gateway_startup upstream=%s", settings.upstream_llama_url)
+    log.info("level=info event=gateway_startup llama=%s vllm=%s default_backend=%s",
+             settings.upstream_llama_url, settings.upstream_vllm_url, settings.default_backend)
     log.info(
         "level=info event=batch_config window_ms=%s max_batch_size=%s",
         settings.batch_window_ms,
@@ -192,6 +201,13 @@ async def health_ready() -> JSONResponse:
         checks["llamacpp"] = {"error": str(exc)}
         REQUESTS.labels(route="ready", status="503").inc()
         return JSONResponse({"status": "not_ready", "checks": checks}, status_code=503)
+
+    try:
+        r = await state.http.get(f"{settings.upstream_vllm_url.rstrip('/')}/health", timeout=5.0)
+        checks["vllm"] = {"http": r.status_code}
+    except Exception as exc:
+        log.warning("level=warn event=ready_vllm_unavailable error=%s", exc)
+        checks["vllm"] = {"error": str(exc), "available": False}
 
     REQUESTS.labels(route="ready", status="200").inc()
     return JSONResponse({"status": "ready", "checks": checks})
@@ -317,30 +333,49 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
         stream = bool(payload.get("stream")) if isinstance(payload, dict) else False
         model_name = str(payload.get("model", "default")) if isinstance(payload, dict) else "default"
     except Exception:
+        payload = None
         stream = False
         model_name = "default"
+
+    # ── Backend resolution ────────────────────────────────────────────
+    backend: BackendName = resolve_backend(
+        payload=payload,
+        headers=dict(request.headers),
+        settings=settings,
+    )
+    upstream_base = backend_url(backend, settings)
+    url = f"{upstream_base}/v1/chat/completions"
+
+    # Strip backend field before forwarding upstream
+    if payload and isinstance(payload, dict):
+        cleaned = strip_backend_field(payload)
+        body = json.dumps(cleaned).encode("utf-8")
 
     # ── Concurrency slot (backpressure) ─────────────────────────────────
     wait_time = await acquire_concurrency_slot(request_id=rid, settings=settings)
     if wait_time is None:
         REQUESTS.labels(route="chat", status="503").inc()
         REJECTED_OVERLOAD.inc()
-        log.warning("level=warn event=concurrency_rejected request_id=%s", rid)
+        BACKEND_REJECTED_OVERLOAD.labels(backend=backend).inc()
+        log.warning("level=warn event=concurrency_rejected request_id=%s backend=%s", rid, backend)
         raise HTTPException(status_code=503, detail="Server is at capacity, try again later")
 
     # ── Batch barrier (coordinate dispatch timing) ─────────────────────
     batch_wait = await state.batcher.wait()
 
-    url = f"{settings.upstream_llama_url.rstrip('/')}/v1/chat/completions"
     headers = _upstream_headers(request)
 
     if stream:
 
         async def event_stream() -> AsyncIterator[bytes]:
             CHAT_COMPLETIONS_STREAMING.inc()
+            BACKEND_CHAT_COMPLETIONS_STREAMING.labels(backend=backend).inc()
             CHAT_REQUESTS.labels(mode="programmatic").inc()
+            BACKEND_CHAT_REQUESTS.labels(backend=backend, mode="programmatic").inc()
             ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").inc()
+            BACKEND_ACTIVE_REQUESTS.labels(backend=backend, mode="programmatic").inc()
             STREAMING_IN_FLIGHT.inc()
+            BACKEND_STREAMING_IN_FLIGHT.labels(backend=backend).inc()
             t0 = time.perf_counter()
             ttft: float | None = None
             total_bytes = 0
@@ -353,6 +388,7 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                         status = resp.status_code
                         err = "upstream_http"
                         CHAT_COMPLETION_ERRORS.labels(kind="upstream_http").inc()
+                        BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_http").inc()
                         err_body = await resp.aread()
                         yield f"data: {err_body.decode()}\n\n".encode()
                         return
@@ -360,20 +396,24 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                         if ttft is None and chunk:
                             ttft = time.perf_counter()
                             TTFT_SECONDS.observe(ttft - t0)
+                            BACKEND_TTFT_SECONDS.labels(backend=backend).observe(ttft - t0)
                         total_bytes += len(chunk)
-                        STREAM_BYTES.inc(len(chunk))
+                        BACKEND_BYTES_TOTAL.labels(backend=backend).inc(len(chunk))
                         yield chunk
             except asyncio.CancelledError:
                 status = 499
                 err = "client_disconnected"
                 CHAT_COMPLETION_ERRORS.labels(kind="client_disconnected").inc()
+                BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="client_disconnected").inc()
                 raise
             except httpx.ReadTimeout as exc:
                 status = 504
                 err = "upstream_timeout"
                 UPSTREAM_TIMEOUTS.inc()
+                BACKEND_UPSTREAM_TIMEOUTS.labels(backend=backend).inc()
                 CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
-                log.error("level=error event=upstream_timeout request_id=%s error=%s", rid, exc)
+                BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_timeout").inc()
+                log.error("level=error event=upstream_timeout request_id=%s backend=%s error=%s", rid, backend, exc)
                 yield (
                     f'data: {json.dumps({"error": {"message": "Upstream timed out", "type": "api_error"}})}\n\n'
                 ).encode()
@@ -381,7 +421,8 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                 status = 502
                 err = "upstream_unavailable"
                 CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
-                log.error("level=error event=upstream_error request_id=%s error=%s", rid, exc)
+                BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_unavailable").inc()
+                log.error("level=error event=upstream_error request_id=%s backend=%s error=%s", rid, backend, exc)
                 yield (
                     f'data: {json.dumps({"error": {"message": "Upstream unavailable", "type": "api_error"}})}\n\n'
                 ).encode()
@@ -389,22 +430,26 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                 try:
                     elapsed = time.perf_counter() - t0
                     UPSTREAM_LATENCY_SECONDS.observe(elapsed)
-                    UPSTREAM_SECONDS.observe(elapsed)
+                    BACKEND_UPSTREAM_LATENCY_SECONDS.labels(backend=backend).observe(elapsed)
                     STREAMING_IN_FLIGHT.dec()
+                    BACKEND_STREAMING_IN_FLIGHT.labels(backend=backend).dec()
                     ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").dec()
+                    BACKEND_ACTIVE_REQUESTS.labels(backend=backend, mode="programmatic").dec()
                     STREAMING_DURATION_SECONDS.observe(elapsed)
+                    BACKEND_STREAMING_DURATION_SECONDS.labels(backend=backend).observe(elapsed)
                     est_tokens = max(0, int(total_bytes // 4))
                     if est_tokens > 0:
                         STREAM_TOKENS.labels(kind="completion").inc(est_tokens)
+                        BACKEND_STREAM_TOKENS.labels(backend=backend, kind="completion").inc(est_tokens)
                     ttft_ms = int((ttft - t0) * 1000) if ttft else None
                     est_tps = (total_bytes / max(elapsed, 1e-9)) / 4.0
                     queue_wait_ms = int(wait_time * 1000) if wait_time else 0
                     batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
                     log.info(
-                        "level=info event=request_complete request_id=%s route=chat stream=true "
+                        "level=info event=request_complete request_id=%s route=chat backend=%s stream=true "
                         "latency_ms=%d stream_duration_ms=%d ttft_ms=%s bytes=%d est_tokens_per_sec=%.2f "
                         "queue_wait_ms=%d batch_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
-                        rid,
+                        rid, backend,
                         int(elapsed * 1000),
                         int(elapsed * 1000),
                         ttft_ms,
@@ -452,8 +497,11 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
     try:
         t0 = time.perf_counter()
         CHAT_COMPLETIONS_NONSTREAMING.inc()
+        BACKEND_CHAT_COMPLETIONS_NONSTREAMING.labels(backend=backend).inc()
         CHAT_REQUESTS.labels(mode="programmatic").inc()
+        BACKEND_CHAT_REQUESTS.labels(backend=backend, mode="programmatic").inc()
         ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").inc()
+        BACKEND_ACTIVE_REQUESTS.labels(backend=backend, mode="programmatic").inc()
         status = 200
         err = ""
         ctok_final = 0
@@ -464,6 +512,8 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             out = resp.content
             if status >= 400:
                 err = "upstream_http"
+                CHAT_COMPLETION_ERRORS.labels(kind="upstream_http").inc()
+                BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_http").inc()
             try:
                 parsed = json.loads(out.decode("utf-8"))
                 usage = parsed.get("usage") if isinstance(parsed, dict) else None
@@ -477,33 +527,39 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             status = 504
             err = "upstream_timeout"
             UPSTREAM_TIMEOUTS.inc()
+            BACKEND_UPSTREAM_TIMEOUTS.labels(backend=backend).inc()
             CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()
+            BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_timeout").inc()
             out = json.dumps({"error": {"message": "Upstream timed out", "type": "api_error"}}).encode()
-            log.error("level=error event=upstream_timeout request_id=%s error=%s", rid, exc)
+            log.error("level=error event=upstream_timeout request_id=%s backend=%s error=%s", rid, backend, exc)
             ctok_final = 0
         except httpx.RequestError as exc:
             status = 502
             err = "upstream_unavailable"
             CHAT_COMPLETION_ERRORS.labels(kind="upstream_unavailable").inc()
+            BACKEND_CHAT_COMPLETION_ERRORS.labels(backend=backend, kind="upstream_unavailable").inc()
             out = json.dumps({"error": {"message": "Upstream unavailable", "type": "api_error"}}).encode()
-            log.error("level=error event=upstream_error request_id=%s error=%s", rid, exc)
+            log.error("level=error event=upstream_error request_id=%s backend=%s error=%s", rid, backend, exc)
             ctok_final = 0
 
         elapsed = time.perf_counter() - t0
         ACTIVE_INFERENCE_REQUESTS.labels(mode="programmatic").dec()
+        BACKEND_ACTIVE_REQUESTS.labels(backend=backend, mode="programmatic").dec()
         UPSTREAM_LATENCY_SECONDS.observe(elapsed)
-        UPSTREAM_SECONDS.observe(elapsed)
+        BACKEND_UPSTREAM_LATENCY_SECONDS.labels(backend=backend).observe(elapsed)
         if status < 400:
             TTFT_SECONDS.observe(elapsed)
+            BACKEND_TTFT_SECONDS.labels(backend=backend).observe(elapsed)
         if ctok_final > 0:
             STREAM_TOKENS.labels(kind="completion").inc(ctok_final)
+            BACKEND_STREAM_TOKENS.labels(backend=backend, kind="completion").inc(ctok_final)
         tps = (len(out) / max(elapsed, 1e-9)) / 200.0
         queue_wait_ms = int(wait_time * 1000) if wait_time else 0
         batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
         log.info(
-            "level=info event=request_complete request_id=%s route=chat stream=false "
+            "level=info event=request_complete request_id=%s route=chat backend=%s stream=false "
             "latency_ms=%d est_tokens_per_sec=%.2f queue_wait_ms=%d batch_wait_ms=%d api_key_id=%s status=%d error_kind=%s",
-            rid,
+            rid, backend,
             int(elapsed * 1000),
             tps,
             queue_wait_ms,
@@ -540,19 +596,27 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
 @app.get("/v1/models")
 async def list_models(request: Request, ctx: APIKeyDep) -> Response:
     rid = _rid(request)
-    url = f"{settings.upstream_llama_url.rstrip('/')}/v1/models"
     headers = _upstream_headers(request)
-    try:
-        r = await state.http.get(url, headers=headers, timeout=30.0)
-        REQUESTS.labels(route="models", status=str(r.status_code)).inc()
-        log.info(
-            "level=info event=request_complete request_id=%s route=models status=%d api_key_id=%s",
-            rid,
-            r.status_code,
-            str(ctx.id),
-        )
-        return Response(content=r.content, status_code=r.status_code, media_type="application/json")
-    except httpx.RequestError as exc:
-        REQUESTS.labels(route="models", status="502").inc()
-        log.error("level=error event=models_upstream_error request_id=%s error=%s", rid, exc)
-        return JSONResponse({"error": {"message": "Upstream unavailable", "type": "api_error"}}, status_code=502)
+
+    async def _fetch_models(base_url: str) -> list[dict[str, Any]]:
+        try:
+            r = await state.http.get(f"{base_url}/v1/models", headers=headers, timeout=15.0)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("data", []) if isinstance(data, dict) else []
+        except Exception:
+            pass
+        return []
+
+    models_llama = await _fetch_models(settings.upstream_llama_url.rstrip("/"))
+    models_vllm = await _fetch_models(settings.upstream_vllm_url.rstrip("/"))
+
+    merged = models_llama + [m for m in models_vllm if m.get("id") not in {x.get("id") for x in models_llama}]
+
+    payload = {"object": "list", "data": merged}
+    REQUESTS.labels(route="models", status="200").inc()
+    log.info(
+        "level=info event=request_complete request_id=%s route=models llama_models=%d vllm_models=%d total=%d api_key_id=%s",
+        rid, len(models_llama), len(models_vllm), len(merged), str(ctx.id),
+    )
+    return JSONResponse(content=payload)

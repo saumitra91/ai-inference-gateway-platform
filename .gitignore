@@ -19,3 +19,4 @@ media/
 *.gguf
 models/
 uploads/
+.DS_Store

@@ -2,6 +2,89 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
+# ── Backend-specific metrics (for multi-backend comparison) ─────
+
+BACKEND_CHAT_REQUESTS = Counter(
+    "inference_backend_chat_requests_total",
+    "Chat completion requests by backend",
+    labelnames=("backend", "mode"),
+)
+
+BACKEND_CHAT_COMPLETIONS_STREAMING = Counter(
+    "inference_backend_chat_completions_streaming_total",
+    "Streaming chat completions by backend",
+    labelnames=("backend",),
+)
+
+BACKEND_CHAT_COMPLETIONS_NONSTREAMING = Counter(
+    "inference_backend_chat_completions_nonstreaming_total",
+    "Non-streaming chat completions by backend",
+    labelnames=("backend",),
+)
+
+BACKEND_ACTIVE_REQUESTS = Gauge(
+    "inference_backend_active_requests",
+    "Currently active inference requests by backend",
+    labelnames=("backend", "mode"),
+)
+
+BACKEND_STREAMING_IN_FLIGHT = Gauge(
+    "inference_backend_streaming_in_flight",
+    "Active streaming sessions by backend",
+    labelnames=("backend",),
+)
+
+BACKEND_UPSTREAM_LATENCY_SECONDS = Histogram(
+    "inference_backend_upstream_seconds",
+    "Upstream wall time by backend",
+    labelnames=("backend",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
+)
+
+BACKEND_TTFT_SECONDS = Histogram(
+    "inference_backend_ttft_seconds",
+    "TTFT by backend",
+    labelnames=("backend",),
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+
+BACKEND_STREAMING_DURATION_SECONDS = Histogram(
+    "inference_backend_streaming_duration_seconds",
+    "Streaming session duration by backend",
+    labelnames=("backend",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
+)
+
+BACKEND_STREAM_TOKENS = Counter(
+    "inference_backend_tokens_total",
+    "Completion tokens by backend",
+    labelnames=("backend", "kind"),
+)
+
+BACKEND_CHAT_COMPLETION_ERRORS = Counter(
+    "inference_backend_chat_completions_errors_total",
+    "Chat completion errors by backend",
+    labelnames=("backend", "kind"),
+)
+
+BACKEND_UPSTREAM_TIMEOUTS = Counter(
+    "inference_backend_upstream_timeouts_total",
+    "Upstream timeouts by backend",
+    labelnames=("backend",),
+)
+
+BACKEND_REJECTED_OVERLOAD = Counter(
+    "inference_backend_rejected_overload_total",
+    "Overload rejections by backend",
+    labelnames=("backend",),
+)
+
+BACKEND_BYTES_TOTAL = Counter(
+    "inference_backend_stream_bytes_total",
+    "Streamed bytes by backend",
+    labelnames=("backend",),
+)
+
 CHAT_REQUESTS = Counter(
     "inference_chat_requests_total",
     "Chat completion requests entering the handler",

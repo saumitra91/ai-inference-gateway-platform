@@ -220,6 +220,11 @@ REQUEST_ID_HEADER = os.environ.get("REQUEST_ID_HEADER", "X-Request-ID")
 # llama.cpp OpenAI-compatible HTTP server (never load GGUF inside Django workers).
 LLAMA_CPP_BASE_URL = os.environ.get("LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080")
 
+# vLLM OpenAI-compatible HTTP server.
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000")
+
+DEFAULT_INFERENCE_BACKEND = os.environ.get("DEFAULT_INFERENCE_BACKEND", "llamacpp")
+
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 LOGGING = {
     "version": 1,

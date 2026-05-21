@@ -50,6 +50,7 @@ from apps.inference.schemas import ChatCompletionRequest
 from apps.inference.services.concurrency import acquire as acquire_slot
 from apps.inference.services.concurrency import release as release_slot
 from apps.inference.services.llama_cpp import LlamaCppBackend
+from apps.inference.services.vllm import VLLMBackend
 from apps.inference.services.prompt_stats import prompt_char_length, rough_token_estimate_from_chars
 from apps.inference.services.request_log import (
     maybe_debug_full_prompt,
@@ -229,9 +230,22 @@ class ChatCompletionService:
             )
         _acquired = True
 
-        # ── 8. Upstream setup ──────────────────────────────────────────
+        # ── 8. Backend selection ────────────────────────────────────────
+        MODEL_TO_BACKEND = {"llama-local": "llamacpp", "llama-vllm": "vllm"}
+        raw_backend: str | None = getattr(req, "backend", None)
+        if not raw_backend:
+            raw_backend = MODEL_TO_BACKEND.get(req.model, None)
+        if not raw_backend:
+            raw_backend = getattr(settings, "DEFAULT_INFERENCE_BACKEND", "llamacpp")
+        if raw_backend not in ("llamacpp", "vllm"):
+            raw_backend = "llamacpp"
+        chosen_backend: str = raw_backend
+
         try:
-            backend = LlamaCppBackend()
+            if chosen_backend == "vllm":
+                backend: LlamaCppBackend | VLLMBackend = VLLMBackend()
+            else:
+                backend = LlamaCppBackend()
             extra_headers: dict[str, str] = {}
             if rid and rid != "-":
                 extra_headers["X-Request-ID"] = rid

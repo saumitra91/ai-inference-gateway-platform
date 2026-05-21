@@ -7,9 +7,12 @@ from typing import Any, AsyncGenerator
 
 from django.conf import settings
 
+from django.conf import settings
+
 from apps.inference.exceptions import UpstreamHTTPError
 from apps.inference.schemas import ChatCompletionRequest
 from apps.inference.services.llama_cpp import LlamaCppBackend
+from apps.inference.services.vllm import VLLMBackend
 from apps.rag.metrics import (
     rag_completions_total,
     rag_hallucination_fallbacks_total,
@@ -142,14 +145,19 @@ async def rag_completion_stream(
         len(augmented_messages), est_prompt_tokens, request.max_tokens,
     )
 
-    backend = LlamaCppBackend()
+    backend: LlamaCppBackend | VLLMBackend
+    rag_backend = getattr(settings, "DEFAULT_INFERENCE_BACKEND", "llamacpp")
+    if rag_backend == "vllm":
+        backend = VLLMBackend()
+    else:
+        backend = LlamaCppBackend()
     try:
         async for chunk in backend.stream_chat_completion(request):
             yield chunk.decode("utf-8")
     except UpstreamHTTPError as exc:
         body_text = exc.body.decode("utf-8", errors="replace")
         logger.error(
-            "llama.cpp rejected RAG prompt: status=%d body=%s",
+            "upstream rejected RAG prompt: status=%d body=%s",
             exc.status_code, body_text,
         )
         # Retry with reduced context on 400 (likely context overflow)

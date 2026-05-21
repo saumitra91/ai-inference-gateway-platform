@@ -4,19 +4,23 @@ Production-grade LLM inference serving platform with concurrency control,
 backpressure, comprehensive observability, and OpenAI-compatible streaming APIs.
 
 ```
-Client → nginx :8888 → FastAPI Gateway :8081 → llama.cpp :8080 → GGUF Model
+Client → nginx :8888 → FastAPI Gateway :8081 ──→ llama.cpp :8080 → GGUF Model
+                                                 ──→ vLLM :8000   → HF Model
                            ↓                          ↑
                      Concurrency Queue          SSE token stream
                      Request Batcher             data: {...}
                      Rate Limiter (Redis)       data: [DONE]
                      API Key Auth (Postgres)
-                     Prometheus /metrics
+                     Backend Router              Prometheus /metrics
+                       • header backend selection   (backend-labeled)
+                       • request body backend
+                       • model name mapping
 
 Django Control Plane :8000 ─── ChromaDB :8000 ─── sentence-transformers
        │
        ├── RAG Chat UI   →  /rag/chat/
        ├── PDF Upload     →  /rag/documents/
-       └── RAG API        →  /rag/api/completions (augmented prompt → llama.cpp)
+       └── RAG API        →  /rag/api/completions (augmented prompt → selected backend)
 ```
 
 ---
@@ -33,16 +37,26 @@ Django Control Plane :8000 ─── ChromaDB :8000 ─── sentence-transform
 │                             │  Request Batcher (50ms window)    │    │
 │                             │  Rate Limiter (Redis)             │    │
 │                             │  API Key Auth (Postgres)          │    │
+│                             │  Backend Router                    │    │
+│                             │    • header / body / model map    │    │
 │                             │  Structured Logging               │    │
 │                             │  Prometheus /metrics              │    │
+│                             │    (backend-labeled)              │    │
 │                             └──────────────────────────────────┘    │
 │                             Django Control Plane :8000              │
 ├─────────────────────────────────────────────────────────────────────┤
-│  L3  INFERENCE LAYER       llama.cpp :8080 │ GGUF Mode              │
+│  L3  INFERENCE LAYER       llama.cpp :8080 │ GGUF Model             │
 │                             ┌──────────────────────────────────┐    │
+│                             │  Server-side slot batching       │    │
 │                             │  Prompt Cache (KV reuse)         │    │
 │                             │  SSE Token Stream                │    │
 │                             └──────────────────────────────────┘    │
+│                                                  ┌──────────────────┐│
+│                             vLLM :8000           │  PagedAttention  ││
+│                             (HF Model)           │  Continuous Bat. ││
+│                                                  │  Prefix Caching  ││
+│                                                  │  Chunked Prefill ││
+│                                                  └──────────────────┘│
 │                             Redis :6379 │ PostgreSQL :5432          │
 ├─────────────────────────────────────────────────────────────────────┤
 │  L4  OBSERVABILITY LAYER   Prometheus :9090 │ Grafana :3000         │
@@ -50,13 +64,15 @@ Django Control Plane :8000 ─── ChromaDB :8000 ─── sentence-transform
 │                             │    PDF Ingestion → Chunk → Embed   │    │
 │                             │    ChromaDB → Retrieve → Augment    │    │
 │                             │    sentence-transformers (384d)     │    │
+│                             │  Dual-backend comparison panels    │    │
 │                             └──────────────────────────────────┘    │
 │                             ChromaDB :8000 (persistent vectors)     │
 ├─────────────────────────────────────────────────────────────────────┤
 │  L4  OBSERVABILITY LAYER   Prometheus :9090 │ Grafana :3000         │
 │                             ┌──────────────────────────────────┐    │
-│                             │  36-panel dashboard              │    │
-│                             │  26 Prometheus recording rules   │    │
+│                             │  43 panels (36 existing + 7      │    │
+│                             │    comparison panels)            │    │
+│                             │  32 Prometheus recording rules   │    │
 │                             └──────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -72,25 +88,37 @@ flowchart LR
         NX["nginx :8888"]
         GW["FastAPI Gateway :8081"]
         CQ["Concurrency Queue"]
+        BR["Backend Router"]
+
+        subgraph Select["Backend Selection Logic"]
+            HDR["X-Inference-Backend header"]
+            BODY["request body backend field"]
+            MAP["model name mapping\nllama-local → llamacpp\nllama-vllm → vllm"]
+        end
     end
     subgraph Inference["Inference Layer (Docker)"]
         LC["llama.cpp :8080"]
-        GGUF["GGUF Model"]
+        VL["vLLM :8000"]
     end
     subgraph Obs["Observability (Docker)"]
         PM["Prometheus :9090"]
         GR["Grafana :3000"]
     end
 
-    K6 -->|"POST /v1/chat/completions"| NX
+    K6 -->|"POST /v1/chat/completions\nbackend: llamacpp|vllm"| NX
     NX -->|"proxy_pass"| GW
-    GW -->|"acquire / queue / 503"| CQ
+    GW --> BR
+    BR --> Select
+    Select -->|"llamacpp"| CQ
+    Select -->|"vllm"| CQ
     CQ -->|"forward"| LC
+    CQ -->|"forward"| VL
     LC -->|"SSE token stream"| GW
+    VL -->|"SSE token stream"| GW
     GW -->|"response"| NX
     NX -->|"response"| K6
 
-    GW -.->|"/metrics scrape"| PM
+    GW -.->|"/metrics scrape\nbackend-labeled"| PM
     PM -.->|"datasource"| GR
 ```
 
@@ -109,22 +137,35 @@ flowchart LR
 11. **Gateway** persists audit log to Postgres (async `create_task`, 100-char redacted preview)
 12. **Client** receives SSE chunks terminated by `data: [DONE]`
 
+### Backend selection (multi-backend routing)
+
+Requests can target either backend via three mechanisms (checked in order):
+
+1. **Request body `"backend"` field**: `{"backend": "vllm", ...}`
+2. **HTTP header**: `X-Inference-Backend: vllm`
+3. **Model name mapping**: `llama-local` → llama.cpp, `llama-vllm` → vLLM
+
+If none are provided, the `DEFAULT_BACKEND` setting (default `"llamacpp"`) is used.
+
+The backend field is stripped from the payload before forwarding upstream — neither llama.cpp nor vLLM see it.
+
 ### Key design decisions
 
 | Decision | Rationale |
 |---|---|
 | **Gateway single-worker ASGI** | Semaphore-based concurrency requires single event loop; multi-worker needs Redis distributed semaphore |
-| **Gateway proxies directly to llama.cpp** | Django NOT in hot path — faster streaming, lower latency, independent scaling |
+| **Gateway proxies directly to llama.cpp/vLLM** | Django NOT in hot path — faster streaming, lower latency, independent scaling |
 | **503 (not 429) for overload** | 503 signals server capacity exhaustion; 429 implies client is sending too fast |
 | **Fail-open on Redis outage** | Availability over strict rate enforcement; rate limiting is operational protection, not security |
 | **Prometheus in-process** | Lowest friction for internal platform; `/metrics` is standard pattern |
 | **Queue tracking via plain int** | Atomic between `await` points in asyncio cooperative multitasking — no lock needed |
-| **Dispatch-time batching (not request fusion)** | Requests are held briefly then released simultaneously, letting llama.cpp batch prompt processing internally. No HTTP body merging needed — preserves per-request streaming and OpenAI compatibility |
+| **Dispatch-time batching (not request fusion)** | Requests are held briefly then released simultaneously, letting the backend batch prompt processing internally. No HTTP body merging needed — preserves per-request streaming and OpenAI compatibility |
 | **Batching after concurrency slot acquisition** | Slots are held during batching wait, maintaining proper backpressure. Without this, the batch could grow unbounded while the upstream is saturated |
 | **Small default window (50ms)** | Balances TTFT increase against batching opportunity. Under light load, 50ms penalty is negligible. Under heavy load, multiple requests accumulate within the window |
-| **sentence-transformers for embeddings (not llama.cpp)** | Embedding via llama.cpp is ~1-2s per chunk (single forward pass); sentence-transformers/all-MiniLM-L6-v2 is ~10ms. For batch ingestion of 100+ chunks, the difference is 100s vs 1s. Both models are in the same embedding space (cosine similarity), but a dedicated embedding model is 100× faster for bulk operations |
-| **ChromaDB over pgvector** | ChromaDB is purpose-built for vector search with cosine similarity, HNSW indexing, and metadata filtering. pgvector would couple vector search to the relational DB, require a Postgres extension, and offer no advantage for this single-node deployment. ChromaDB runs as an independent service with persistent storage |
-| **RAG in Django (not gateway)** | Django owns the ORM, admin UI, templates, and session auth. Adding RAG to Django avoids cross-service file transfers for PDF ingestion, keeps the gateway focused on inference orchestration, and leverages existing LlamaCppBackend for the generation step |
+| **Backend routing in gateway** | Backend selection happens at the gateway before the batch barrier, so batching is per-backend-aware. The `backend` field is stripped from the payload before forwarding |
+| **sentence-transformers for embeddings** | Embedding via llama.cpp is ~1-2s per chunk; sentence-transformers/all-MiniLM-L6-v2 is ~10ms. 100× faster for bulk ingestion |
+| **ChromaDB over pgvector** | Purpose-built for vector search with cosine similarity, HNSW indexing, and metadata filtering |
+| **RAG in Django (not gateway)** | Django owns the ORM, admin UI, templates, and session auth. RAG in Django avoids cross-service file transfers |
 
 ---
 
@@ -132,13 +173,20 @@ flowchart LR
 
 ### Inference Gateway
 - OpenAI-compatible `POST /v1/chat/completions` (streaming + non-streaming)
-- `GET /v1/models` — lists available models from llama.cpp
+- `GET /v1/models` — lists available models from both backends (merged)
 - SSE streaming with `data: [DONE]` termination sentinel
 - API key authentication — HMAC-SHA256 with timing-safe comparison
 - Format: `sk_local_{public_id}_{secret}` (128-bit + 256-bit entropy)
 
+### Multi-Backend Routing
+- **Backend selection**: `backend` field in request body, `X-Inference-Backend` header, or model name mapping
+- **Model mapping**: `llama-local` → llama.cpp, `llama-vllm` → vLLM
+- **Default backend**: Configurable via `DEFAULT_BACKEND` (default `"llamacpp"`)
+- **Transparent proxying**: The `backend` field is stripped before forwarding upstream
+- **Django integration**: RAG pipeline and UI chat support backend selection via `DEFAULT_INFERENCE_BACKEND`
+
 ### Request Batching
-- **Dispatch-time batching** — concurrent requests arriving within a configurable window (default 50ms) are released simultaneously to llama.cpp
+- **Dispatch-time batching** — concurrent requests arriving within a configurable window (default 50ms) are released simultaneously
 - **Configurable max batch size** (default 8) — limits worst-case batch wait
 - **No HTTP body merging** — preserves per-request streaming and OpenAI compatibility
 - **Safe fallback** — single requests flush after the window timeout with no starvation risk
@@ -151,12 +199,13 @@ flowchart LR
 - Overload rejection — 503 when queue is full
 - Queue saturation monitoring via Prometheus gauge
 
-### Observability (25 Prometheus metrics)
+### Observability (25 + 10 backend-specific Prometheus metrics)
+
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `inference_chat_requests_total` | Counter | `mode` | Request count |
 | `inference_time_to_first_token_seconds` | Histogram | — | TTFT distribution |
-| `inference_upstream_wall_seconds` | Histogram | — | llama.cpp latency |
+| `inference_upstream_wall_seconds` | Histogram | — | Upstream latency |
 | `inference_streaming_duration_seconds` | Histogram | — | Stream session length |
 | `inference_queue_wait_seconds` | Histogram | — | Time in concurrency queue |
 | `inference_queue_depth` | Gauge | — | Current queue length |
@@ -175,25 +224,30 @@ flowchart LR
 | `inference_batch_wait_seconds` | Histogram | — | Time in batch barrier |
 | `inference_batch_queue_depth` | Gauge | — | Current barrier queue |
 | `inference_batch_efficiency` | Gauge | — | Cumulative batching efficiency |
+| `inference_backend_chat_requests_total` | Counter | `backend`, `mode` | Request count by backend |
+| `inference_backend_ttft_seconds` | Histogram | `backend` | TTFT by backend |
+| `inference_backend_upstream_seconds` | Histogram | `backend` | Upstream latency by backend |
+| `inference_backend_streaming_duration_seconds` | Histogram | `backend` | Stream duration by backend |
+| `inference_backend_active_requests` | Gauge | `backend`, `mode` | Active requests by backend |
+| `inference_backend_streaming_in_flight` | Gauge | `backend` | Active streams by backend |
+| `inference_backend_chat_completions_errors_total` | Counter | `backend`, `kind` | Errors by backend |
+| `inference_backend_tokens_total` | Counter | `backend`, `kind` | Tokens by backend |
+| `inference_backend_upstream_timeouts_total` | Counter | `backend` | Timeouts by backend |
+| `inference_backend_rejected_overload_total` | Counter | `backend` | Overload rejections by backend |
 
-### Grafana Dashboard (29 panels)
-- **Stat row**: Active Requests, Queue Depth, Overload Rejections, Request Rate, Error Rate, Upstream Timeouts
-- **Latency**: Upstream Latency p50/p95/p99, TTFT p50/p95/p99, Queue Wait p50/p95/p99, Streaming Duration p50/p95/p99
-- **Throughput**: Token Throughput, Request Rate by Mode, Streams In-Flight
-- **Health**: Error Rate by Kind, Validation & Rejection Rate, Rate Limit & Quota Hits, Django Process Health, Gateway Process Health, Overload & Timeout Rate
-- **Heatmap**: TTFT distribution over time
-- **Batching row**: Batch Queue Depth, Batch Efficiency, Avg Batch Size, Batch Dispatch Rate, Batch Size Over Time, Batch Wait Time p50/p95
+### Grafana Dashboard (36 + 7 comparison panels)
 
-### Prometheus Recording Rules (30 rules)
-- `inference:request_rate:5m`, `inference:error_rate:5m`, `inference:error_ratio:5m`
-- `inference:upstream_latency_p50/p95/p99:5m`
-- `inference:ttft_p50/p95/p99:5m`
-- `inference:stream_duration_p50/p95:5m`
-- `inference:token_throughput:1m`, `inference:token_throughput:5m`
-- `inference:queue_saturation:1m`, `inference:active_requests:1m`
-- `inference:gateway_memory_gb:1m`, `inference:gateway_cpu:1m`
-- `inference:batch_size_avg:5m`, `inference:batch_efficiency:5m`, `inference:batch_single_ratio:5m`
-- `inference:batch_wait_p50/p95:5m`
+**Existing panels (36):** Stat row (Active Requests, Queue Depth, Overload Rejections, Request Rate, Error Rate), Latency (Upstream p50/p95/p99, TTFT p50/p95/p99, Queue Wait p50/p95/p99, Streaming Duration p50/p95/p99), Throughput (Token Throughput, Request Rate by Mode, Streams In-Flight), Health (Error Rate by Kind, Validation & Rejection, Rate Limit & Quota, Process Health), Heatmap (TTFT distribution), Batching (Queue Depth, Efficiency, Avg Batch Size, Dispatch Rate, Size Over Time, Wait Time), RAG panels (7)
+
+**Comparison panels (7):** TTFT Comparison (p50/p95), Upstream Latency Comparison (p50/p95), Request Rate by Backend, Token Throughput by Backend, Error Rate by Backend, Active Requests by Backend, Streaming In-Flight by Backend
+
+**Template variables:** `datasource` (Prometheus), `mode` (All/streaming/non-streaming), `backend` (All/llamacpp/vllm)
+
+### Prometheus Recording Rules (32 rules)
+
+**Existing (25):** Request rate (1m/5m), Error rate (5m), Timeout rate (5m), Overload rate (5m), Error ratio (5m), Upstream latency p50/p95/p99 (5m), TTFT p50/p95/p99 (5m), Stream duration p50/p95 (5m), Queue wait p50/p95 (5m), Token throughput (1m/5m), Queue saturation (1m), Active requests (1m), Streaming in-flight (1m), Batch avg size (5m), Batch wait p50/p95 (5m), Batch efficiency (5m), Batch single ratio (5m), Gateway memory (1m), Gateway CPU (1m)
+
+**Backend comparison (7 new):** `inference:backend_request_rate:1m`, `inference:backend_error_rate:5m`, `inference:backend_ttft_p50/p95/p99:5m`, `inference:backend_upstream_latency_p50/p95/p99:5m`, `inference:backend_token_throughput:1m`, `inference:backend_active_requests:1m`, `inference:backend_timeout_rate:5m`
 
 ### RAG Pipeline
 
@@ -237,15 +291,14 @@ flowchart TB
         COLL["rag_documents\nhnsw:space=cosine"]
     end
 
-    subgraph LLM["llama.cpp :8080"]
-        INFER["POST /v1/chat/completions\nstream=true"]
+    subgraph LLM["Inference Backend"]
+        INFER["POST /v1/chat/completions\nstream=true\n(selected backend)"]
     end
 
     subgraph Storage["PostgreSQL :5432"]
         DOCS["Document model\nUUID PK · status · chunk_count"]
     end
 
-    %% Ingestion flow
     DOC -->|"POST multipart/form-data"| UPL
     UPL -->|"save file + Document(UPLOADED)"| DOCS
     UPL -->|"asyncio.ensure_future"| PROC
@@ -256,7 +309,6 @@ flowchart TB
     STORE -->|"collection.add()"| COLL
     COLL -->|"status=READY"| DOCS
 
-    %% Inference flow
     UI -->|"POST /rag/api/completions\n{messages, document_ids}"| CHAT
     CHAT --> STREAM
     STREAM --> QEMBED
@@ -275,46 +327,11 @@ flowchart TB
 
 | Layer | Mechanism |
 |---|---|
-| **Confidence threshold** | `RAG_MIN_SCORE=0.25` — chunks below this cosine similarity are discarded. If no chunks survive, the model explicitly says "not found". Default tuned for all-MiniLM-L6-v2's typical similarity range (0.2–0.6) |
-| **System prompt** | Hard-coded instruction: "Answer based ONLY on the provided context. Do NOT use your training data. If the context does not contain enough information, say EXACTLY: 'I could not find this information in the uploaded documents.'" |
-| **Source grounding** | Every chunk in context is prefixed with `[Source: {document_id}, page {page}]` — the model can reference these directly |
-| **No fabricated citations** | The citation data comes from actual retrieval metadata, not from the model's output. Citations are sent as structured `rag_metadata` SSE events alongside the token stream |
-| **Context window limit** | `RAG_MAX_CONTEXT_CHARS=8000` prevents oversized prompts that might overwhelm the relevant context signal |
-
-**Embedding Model: sentence-transformers/all-MiniLM-L6-v2**
-
-- **Dimensions**: 384 (compact, fast cosine similarity)
-- **Size**: ~80 MB loaded in memory
-- **Speed**: ~10ms per text on CPU (vs ~1-2s via llama.cpp forward pass)
-- **Quality**: MTEB score ~58 — sufficient for retrieval tasks
-- **Tradeoff**: Diminutive compared to BGE or E5 models, but 10× faster and 5× smaller. For a local single-user system, speed and memory efficiency outweigh marginal recall gains
-- **Normalization**: embeddings are L2-normalized so cosine similarity = dot product
-
-**Vector Database: ChromaDB**
-
-| Aspect | Decision |
-|---|---|
-| **Why ChromaDB** | Purpose-built for vector search with HNSW indexing, cosine similarity, metadata filtering. No Postgres extension needed. Independent service with persistent volume |
-| **Why not pgvector** | Would couple vector search to the relational DB. Requires pgvector extension install and migration. No operational advantage for a single-node deployment |
-| **Why not Qdrant** | Best-in-class performance but overkill for local single-user. Higher memory footprint. No significant feature benefit for this use case |
-| **Index** | HNSW with cosine distance (`hnsw:space: cosine`). Default ef_construction and M parameters |
-| **Persistence** | Docker named volume `chromadb_data` — survives container restarts |
-| **Batching** | Chunks stored in batches of 100 to balance throughput vs memory |
-| **Metadata** | Each chunk stores `document_id`, `chunk_index`, `page_number` for source tracking and filtered retrieval |
-
-**Chunking Strategy:**
-
-```
-paragraph split → over-sized? → sentence split → over-sized? → word split
-     ↓                    ↓                    ↓
-  exact               sentences             words
-  paragraphs          with overlap          with overlap
-```
-
-- **Default chunk size**: 500 characters (configurable via `RAG_CHUNK_SIZE`)
-- **Default overlap**: 50 characters (configurable via `RAG_CHUNK_OVERLAP`)
-- Overlap computed from trailing sentences, not raw characters — preserves semantic boundaries
-- Chunks are re-indexed globally after page-level chunking so chunk_index is monotonically increasing
+| **Confidence threshold** | `RAG_MIN_SCORE=0.25` — chunks below this cosine similarity are discarded. If no chunks survive, the model explicitly says "not found" |
+| **System prompt** | Hard-coded instruction: "Answer based ONLY on the provided context. Do NOT use your training data." |
+| **Source grounding** | Every chunk is prefixed with `[Source: {document_id}, page {page}]` |
+| **No fabricated citations** | Citation data comes from actual retrieval metadata, not model output. Sent as `rag_metadata` SSE events |
+| **Context window limit** | `RAG_MAX_CONTEXT_CHARS=8000` prevents oversized prompts |
 
 **RAG Observability (10 Prometheus metrics):**
 
@@ -355,11 +372,124 @@ paragraph split → over-sized? → sentence split → over-sized? → word spli
 | `RAG_CHUNK_SIZE` | 500 | Characters per chunk |
 | `RAG_CHUNK_OVERLAP` | 50 | Overlap between consecutive chunks (chars) |
 | `RAG_TOP_K` | 5 | Number of chunks retrieved per query |
-| `RAG_MIN_SCORE` | 0.25 | Minimum cosine similarity for chunk inclusion (all-MiniLM-L6-v2 typically returns 0.2–0.6) |
+| `RAG_MIN_SCORE` | 0.25 | Minimum cosine similarity for chunk inclusion |
 | `RAG_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | sentence-transformers model name |
 | `RAG_MAX_CONTEXT_CHARS` | 8000 | Max context characters sent to the model |
 | `CHROMADB_HOST` | `chromadb` | ChromaDB Docker service host |
 | `CHROMADB_PORT` | 8000 | ChromaDB HTTP API port |
+
+## vLLM Backend
+
+vLLM is an open-source LLM serving engine by UC Berkeley's LMSys, designed for high-throughput serving with PagedAttention. Unlike llama.cpp's slot-based batching, vLLM uses continuous batching and a paged KV cache.
+
+### Architectural differences
+
+| Aspect | llama.cpp | vLLM |
+|--------|-----------|------|
+| **Batching** | Server-side slot batching (`--parallel N`). Each slot is a pre-allocated KV cache partition. Slots are static — a request holds a slot until complete | Continuous batching. Requests are added/removed from the active batch after each iteration. No slot pre-allocation — KV cache pages are allocated on demand |
+| **KV Cache** | Contiguous memory per slot. Fixed size = `ctx-size / parallel`. Wasted memory when slots are partially used | PagedAttention — KV cache is stored in fixed-size pages (blocks), allocated on demand. Near-zero wasted memory. Enables higher effective batch sizes |
+| **Memory efficiency** | Lower — each slot reserves `ctx-size / parallel` tokens of KV cache even if the request uses fewer | Higher — KV cache pages are allocated per-token, so total memory used matches actual usage across all requests |
+| **Prefill** | First token computed synchronously per slot. Batch-aware prefill (processes multiple prompts together) | Chunked prefill (optional) — long prompts can be split into chunks that interleave with decode. Reduces TTFT for concurrent requests |
+| **Prefix caching** | Manual via prompt cache (KV reuse for identical prefixes) | Automatic — PagedAttention's block-level caching can reuse KV pages across requests with common prefixes |
+| **Model format** | GGUF (quantized, single-file). Supports 2–8 bit quantization | HuggingFace format (SafeTensors). Typically FP16/BF16. Requires more memory/VRAM but higher precision |
+| **Quantization** | Native GGUF quantization (Q2–Q8, IQ). Run a 70B model in 32GB RAM | AWQ/GPTQ via external quantization. No native quantization in the serving path |
+| **CPU support** | First-class CPU support with ggml backend. Optimized for ARM NEON, x86 AVX2 | Experimental CPU backend (`--device cpu`). Significantly slower than GPU. Not production-ready for CPU |
+| **GPU support** | CUDA/ROCm via ggml. Good performance but less optimized than vLLM for GPU | First-class GPU support with CUDA kernels. FlashAttention, continuous batching, PagedAttention all GPU-native |
+| **Startup time** | Fast — loads GGUF directly, no conversion | Slower — loads Safetensors, builds CUDA graphs, compiles kernels |
+| **OpenAI API** | Built-in `llama-server` with `/v1/chat/completions` | Native OpenAI-compatible server |
+
+### Why vLLM differs architecturally
+
+**PagedAttention**: vLLM's key innovation. Traditional KV cache is stored as a contiguous 2D tensor `[num_layers, 2, num_heads, seq_len, head_dim]`. This causes:
+
+- **Internal fragmentation**: Each request's KV cache is pre-allocated for the maximum context length, regardless of actual usage
+- **External fragmentation**: Memory cannot be shared across sequences even when they share prefixes (like system prompts)
+
+PagedAttention solves this by storing KV cache in fixed-size blocks (pages). Each block holds KV for a fixed number of tokens (typically 16). Blocks are mapped via a block table — analogous to virtual memory paging in operating systems. This enables:
+
+- **Near-zero fragmentation**: Blocks are allocated on demand as tokens are generated
+- **Memory sharing**: Multiple sequences can share blocks for common prefixes (system prompts, few-shot examples)
+- **Larger effective batch sizes**: More requests fit in the same memory budget
+
+**Continuous batching**: Unlike llama.cpp's static slots, vLLM evaluates the active batch after each iteration. Completed sequences are removed immediately and new sequences can join on the next iteration. This maximizes GPU utilization during decode — when some sequences generate EOS tokens early, their slots are immediately reclaimed.
+
+**Chunked prefill**: Long prompts cause high TTFT because the prefill phase is compute-bound and blocks decode for all other sequences. Chunked prefill splits the prefill into smaller chunks that interleave with decode steps, reducing TTFT variance at the cost of slightly longer overall prefill.
+
+### Benchmark methodology (llama.cpp vs vLLM)
+
+Comparison tests should control for:
+
+1. **Same model weights**: Quantization differences (GGUF Q4_K_M vs FP16) inherently favor vLLM on quality but penalize it on latency. For fair comparison, use an equivalently quantized model or disable quantization entirely
+2. **Same hardware**: Both backends must run on the same machine. GPU-only benchmarks force vLLM to GPU and llama.cpp to CPU, which is an apples-to-oranges comparison
+3. **Same concurrency level**: Set `INFERENCE_MAX_CONCURRENCY` identically for both. vLLM may benefit from higher concurrency due to continuous batching
+4. **Same prompt/response lengths**: Use fixed-size prompts and `max_tokens` to isolate backend behavior from prompt variance
+
+### Expected performance differences
+
+| Workload | Expected winner | Reason |
+|----------|---------------|--------|
+| Single request, low latency | llama.cpp (CPU) / vLLM (GPU) | On CPU, llama.cpp's ggml is heavily optimized. On GPU, vLLM's CUDA kernels are faster |
+| Many concurrent requests | vLLM | Continuous batching + PagedAttention enable higher throughput under load. Fewer memory constraints |
+| Long context (32K+) | vLLM | PagedAttention handles long contexts without quadratic memory growth. llama.cpp requires slot pre-allocation |
+| Mixed prompt lengths | vLLM | Chunked prefill prevents long prompts from blocking short ones |
+| CPU-only deployment | llama.cpp | vLLM's CPU backend is experimental. ggml is production-grade for CPU |
+| Streaming TTFT | vLLM (GPU only) | Chunked prefill reduces TTFT for long prompts under concurrency |
+| Memory-constrained | llama.cpp (via GGUF quantization) | Q4_K_M quantized models use ~4.5 bits/param. FP16 models use 16 bits/param |
+
+### Tuning notes
+
+**llama.cpp**:
+- `--parallel N` must match `inference_max_concurrency` in the gateway
+- `--ctx-size` determines per-slot context: `ctx-size / parallel` tokens each
+- `--batch-size` and `--ubatch-size` control prefill batching. Larger = faster prompt processing
+- Thread count should be `physical_cores - 1` on shared machines
+
+**vLLM**:
+- `--max-num-seqs` controls the maximum number of sequences in a batch. Higher = more throughput at the cost of latency
+- `--enable-chunked-prefill` helps reduce TTFT under concurrency but increases per-token overhead
+- `--gpu-memory-utilization` sets the fraction of GPU memory for KV cache (default 0.90)
+- `--max-model-len` limits the maximum sequence length. Reducing this increases the available KV cache budget
+- For CPU: `--device cpu` enables the experimental CPU backend
+
+### Bottleneck analysis
+
+| Bottleneck | llama.cpp | vLLM |
+|-----------|-----------|------|
+| **Prompt processing** | Prefill is single-threaded for a single request; batched across parallel slots | Batch-aware prefill with FlashAttention. Faster for concurrent prompts |
+| **Token generation** | Thread pool across CPU cores. Memory-bound (GGUF format means fewer bytes/param) | GPU compute-bound. Faster per-token on GPU, but memory-bound with small batch sizes |
+| **Memory (KV cache)** | Slot-based allocation. `ctx-size / parallel` per slot. Fixed cost regardless of usage | Paged allocation. Cost proportional to actual sequence length |
+| **Request throughput** | Limited by slot count (`--parallel`). Saturated slots cause queuing | Limited by GPU memory. Higher effective throughput from tight packing |
+| **Queue buildup** | Gateway queue fills when all parallel slots are occupied | Higher threshold before queue builds, but TTFT increases as batch grows |
+
+### Strengths and weaknesses summary
+
+**llama.cpp strengths**:
+- First-class CPU support with SIMD optimization (ARM NEON, x86 AVX2/AVX512)
+- GGUF quantization (Q2–Q8) allows large models to run on limited hardware
+- Fast startup — no model conversion or kernel compilation
+- Single-binary deployment
+- Mature, well-documented CPU inference
+
+**llama.cpp weaknesses**:
+- Static slot allocation wastes KV cache memory
+- No continuous batching — slot released only after sequence completion
+- GPU support less optimized than vLLM
+- Prefix caching is manual (prompt cache), not automatic at the token level
+
+**vLLM strengths**:
+- PagedAttention eliminates KV cache fragmentation
+- Continuous batching maximizes GPU utilization
+- Chunked prefill reduces TTFT variance
+- Native FP16/BF16 inference — no quality loss from quantization
+- Automatic prefix caching
+- Production-grade OpenAI API server
+
+**vLLM weaknesses**:
+- GPU-native design — CPU backend is experimental and slow
+- Higher memory requirements — FP16 models are ~2× the size of Q4 GGUF
+- Longer startup time — loads model weights, builds CUDA graphs
+- Less flexibility in quantization — requires external AWQ/GPTQ tooling
+- More complex deployment — larger image, more dependencies
 
 ### Resilience
 - Graceful shutdown with 60s connection drain (`--timeout-graceful-shutdown`)
@@ -429,7 +559,7 @@ docker compose exec django python manage.py createsuperuser
 ### Test a request
 
 ```bash
-# Streaming chat completion
+# Streaming chat completion (default backend — llama.cpp)
 curl -X POST http://localhost:8888/v1/chat/completions \
   -H "Authorization: Bearer sk_local_<your-key>" \
   -H "Content-Type: application/json" \
@@ -440,7 +570,7 @@ curl -X POST http://localhost:8888/v1/chat/completions \
     "max_tokens": 64
   }'
 
-# Non-streaming
+# Non-streaming (default backend)
 curl -X POST http://localhost:8888/v1/chat/completions \
   -H "Authorization: Bearer sk_local_<your-key>" \
   -H "Content-Type: application/json" \
@@ -450,16 +580,53 @@ curl -X POST http://localhost:8888/v1/chat/completions \
     "stream": false,
     "max_tokens": 64
   }'
+
+# Target specific backend via request body
+curl -X POST http://localhost:8888/v1/chat/completions \
+  -H "Authorization: Bearer sk_local_<your-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Hello from vLLM!"}],
+    "stream": true,
+    "max_tokens": 64,
+    "backend": "vllm"
+  }'
+
+# Target specific backend via HTTP header
+curl -X POST http://localhost:8888/v1/chat/completions \
+  -H "Authorization: Bearer sk_local_<your-key>" \
+  -H "Content-Type: application/json" \
+  -H "X-Inference-Backend: vllm" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Hello from vLLM!"}],
+    "stream": true,
+    "max_tokens": 64
+  }'
+
+# Use model name mapping
+curl -X POST http://localhost:8888/v1/chat/completions \
+  -H "Authorization: Bearer sk_local_<your-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-vllm",
+    "messages": [{"role": "user", "content": "This routes to vLLM via model mapping!"}],
+    "stream": true,
+    "max_tokens": 64
+  }'
 ```
 
 ---
 
 ## k6 Load Testing
 
-Nine scripts in `loadtest/`:
+Nine profiling scripts + 3 benchmark scripts in `loadtest/`:
+
+### Profiling scripts
 
 | Script | Description | VUs | Duration |
-|---|---|---|---|
+|---|---|---|---|---|
 | `chat-streaming.js` | Streaming completions with TTFT tracking | 5 | 3m |
 | `chat-nonstreaming.js` | Non-streaming completions with usage validation | 10 | 3m |
 | `chat-mixed.js` | Concurrent streaming + non-streaming scenarios | 4+6 | 3m |
@@ -470,11 +637,27 @@ Nine scripts in `loadtest/`:
 | `spike-test.js` | Sudden burst (0→20→0 VUs) — tests backpressure | 20 | 2m |
 | `soak-test.js` | Sustained moderate load, alternates streaming/non-streaming | 3 | 30m |
 
+### Benchmark scripts (llama.cpp vs vLLM)
+
+| Script | Description | Default VUs | Duration |
+|---|---|---|---|
+| `benchmark-llamacpp.js` | All requests routed to llama.cpp via `backend: "llamacpp"` | 4 | 5m |
+| `benchmark-vllm.js` | All requests routed to vLLM via `backend: "vllm"` | 4 | 5m |
+| `benchmark-headtohead.js` | Alternates between both backends — half VUs per backend | 6 (3+3) | 5m |
+
 ```bash
-K6_API_KEY="sk_local_..." k6 run loadtest/spike-test.js
+# Run single-backend benchmark
+K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-llamacpp.js
+K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-vllm.js
+
+# Run head-to-head comparison (produces side-by-side metrics)
+K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-headtohead.js
+
+# Customize concurrency and duration
+K6_API_KEY="sk_local_..." K6_VUS=8 K6_DURATION="10m" k6 run loadtest/benchmark-headtohead.js
 ```
 
-All scripts support `K6_API_KEY`, `K6_BASE_URL`, `K6_VUS` env vars.
+All scripts support `K6_API_KEY`, `K6_BASE_URL`, `K6_VUS` env vars. Benchmark scripts use the `backend` field to route requests to the correct inference backend.
 
 ---
 
@@ -484,12 +667,25 @@ Gateway settings (`deploy/gateway/gateway/config.py`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `inference_max_concurrency` | 4 | Max simultaneous llama.cpp calls. Must match llama.cpp `--parallel` and be ≤ `ctx-size / prompt-tokens` |
+| `inference_max_concurrency` | 4 | Max simultaneous inference calls. Must match backend concurrency capacity |
 | `inference_queue_size` | 10 | Max queued requests before 503 |
 | `inference_queue_timeout_s` | 30.0 | Queue wait timeout before 503 |
 | `batch_window_ms` | 50.0 | Time window for aggregating requests into a batch (ms) |
 | `batch_max_size` | 8 | Maximum requests per batch |
 | `gateway_persist_logs` | True | Persist request logs to Postgres |
+| `upstream_llama_url` | `http://llamacpp:8080` | llama.cpp OpenAI-compatible API base URL |
+| `upstream_vllm_url` | `http://vllm:8000` | vLLM OpenAI-compatible API base URL |
+| `default_backend` | `llamacpp` | Default backend when none is specified by the client |
+
+### Backend selection
+
+Clients can target a specific backend via three mechanisms (checked in order):
+
+1. **Request body**: `{"backend": "vllm", ...}`
+2. **HTTP header**: `X-Inference-Backend: vllm`
+3. **Model name mapping**: `llama-local` → llama.cpp, `llama-vllm` → vLLM
+
+### llama.cpp parallel slots
 
 ### llama.cpp parallel slots
 
@@ -515,26 +711,37 @@ EXTRA_ARGS: "--parallel 4 --batch-size 1024 --ubatch-size 512 --ctx-size 8192"
 deploy/
 ├── gateway/              # FastAPI inference gateway
 │   └── gateway/
-│       ├── main.py       # Streaming + non-streaming handlers
+│       ├── main.py       # Streaming + non-streaming handlers with multi-backend routing
+│       ├── backend_router.py # Backend resolution logic (header/body/model mapping)
 │       ├── concurrency.py # Semaphore + queue with backpressure
 │       ├── batcher.py    # Request batch barrier (dispatch-time coordination)
-│       ├── metrics.py    # 25 Prometheus metric families
+│       ├── metrics.py    # 25 + 10 backend-specific Prometheus metric families
 │       ├── limits.py     # Redis rate limiter (fail-open)
 │       ├── crypto_auth.py # HMAC-SHA256 API key auth
 │       ├── runtime_metrics.py # Process RSS, CPU%, uptime
-│       └── config.py     # Pydantic settings
+│       └── config.py     # Pydantic settings (llama + vllm URLs)
+├── vllm/                 # vLLM inference backend
+│   ├── Dockerfile        # Python-based vLLM image (cpu/cuda)
+│   └── entrypoint.sh     # Model validation, startup logging, exec
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape config (django + gateway)
-│   └── rules.yml         # 29 recording rules (7 RAG specific)
+│   └── rules.yml         # 32 recording rules (7 backend comparison + 7 RAG)
 ├── grafana/
 │   └── provisioning/
 │       └── dashboards/
-│           └── inference-dashboard.json  # 36 panels (7 RAG specific)
+│           └── inference-dashboard.json  # 43 panels (7 comparison + 7 RAG)
 ├── nginx/
 │   └── default.conf      # Route /v1/ to gateway, / to Django
 └── llamacpp/             # Multi-arch llama.cpp Docker build
 
 apps/
+├── inference/            # Inference service layer
+│   └── services/
+│       ├── protocol.py   # InferenceBackend Protocol (ABC)
+│       ├── llama_cpp.py  # LlamaCppBackend (streaming proxy to llama.cpp)
+│       ├── vllm.py       # VLLMBackend (streaming proxy to vLLM)
+│       ├── chat_completion.py # Orchestrator with backend selection
+│       └── ...
 ├── rag/                   # RAG pipeline
 │   ├── models.py          # Document model (UUID PK, status, chunk tracking)
 │   ├── views.py           # Upload, list, status, RAG chat, streaming completions
@@ -545,7 +752,7 @@ apps/
 │   │   ├── chunker.py          # Recursive paragraph→sentence→word splitting
 │   │   ├── embeddings.py       # sentence-transformers wrapper (lazy-loaded)
 │   │   ├── vector_store.py     # ChromaDB HTTP client (store, search, delete)
-│   │   ├── rag_completion.py   # Retrieval + augmentation + streaming pipeline
+│   │   ├── rag_completion.py   # Retrieval + augmentation + streaming (configurable backend)
 │   │   └── document_processor.py # Async background ingestion orchestrator
 │   └── migrations/
 │       └── 0001_initial.py     # Document model migration
@@ -561,7 +768,7 @@ templates/rag/
 
 uploads/                   # PDF uploads (bind-mounted in Docker)
 
-loadtest/                 # 9 k6 test scripts
+loadtest/                 # 12 k6 test scripts (9 profiling + 3 benchmark)
 docs/
 ├── architecture.md           # Full architecture reference
 ├── architecture-diagram.md   # Diagram spec (Mermaid + Excalidraw)
@@ -575,15 +782,16 @@ docs/
 ## Production readiness
 
 | Category | Status | Notes |
-|---|---|---|---|
-| Observability | 9/10 | 35 metrics, 36 Grafana panels, structured JSON logging, p50/p95/p99 latency, batching metrics, RAG metrics |
+|---|---|---|---|---|
+| Observability | 9/10 | 35 + 10 backend-specific metrics, 43 Grafana panels (7 comparison + 7 RAG), structured JSON logging, p50/p95/p99 latency, batching metrics, RAG metrics |
+| Multi-Backend | 9/10 | llama.cpp + vLLM, 3 routing methods (body/header/model map), backend-labeled metrics, comparison dashboards, Django RAG support |
 | Concurrency | 9/10 | Semaphore + queue, proper 503, queue saturation tracking, request batching (50ms window). Multi-worker needs Redis semaphore |
 | Streaming | 9/10 | SSE, CancelledError handling, timeout/unavailable errors, `[DONE]` sentinel, RAG streaming with citation SSE events |
 | Resilience | 7/10 | Redis fail-open, graceful shutdown, restart policies. Missing: circuit breaker |
 | Security | 8/10 | HMAC-SHA256, timing-safe compare, Bearer auth, CSRF for UI, rate limiting |
 | Docker | 8/10 | Multi-stage builds, healthchecks, resource limits, restart policies |
 | RAG | 9/10 | PDF ingestion, chunking, embedding, ChromaDB retrieval, anti-hallucination prompt, source citations, 10 RAG metrics, 7 Grafana panels |
-| Testing | 8/10 | 9 k6 scripts: streaming, non-streaming, mixed, batch, step-stress, cancellation, timeout, spike, soak |
+| Testing | 8/10 | 9 profiling + 3 benchmark k6 scripts: head-to-head comparison, single-backend benchmarks |
 
 ---
 

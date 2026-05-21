@@ -62,6 +62,45 @@ services:
     mem_limit: 12g
     restart: unless-stopped
 
+  vllm:
+    platform: linux/amd64
+    build:
+      context: ./deploy/vllm
+      dockerfile: Dockerfile
+    image: local/vllm:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      VLLM_MODEL_PATH: /vllm-model
+      VLLM_DEVICE: ${VLLM_DEVICE:-cpu}
+      VLLM_HOST: "0.0.0.0"
+      VLLM_PORT: "8000"
+      VLLM_DTYPE: ${VLLM_DTYPE:-auto}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-4096}
+      VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.90}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 256 --enable-chunked-prefill}
+    volumes:
+      - ./models/vllm:/vllm-model:ro
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    mem_limit: ${VLLM_MEM_LIMIT:-8g}
+    restart: unless-stopped
+    # Enable for GPU acceleration:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
   gateway:
     build:
       context: ./deploy/gateway
@@ -74,6 +113,8 @@ services:
       DATABASE_URL: postgres://platform:platform@postgres:5432/platform
       REDIS_URL: redis://redis:6379/0
       UPSTREAM_LLAMA_URL: http://llamacpp:8080
+      UPSTREAM_VLLM_URL: http://vllm:8000
+      DEFAULT_BACKEND: ${DEFAULT_BACKEND:-llamacpp}
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
       GATEWAY_PERSIST_LOGS: "true"

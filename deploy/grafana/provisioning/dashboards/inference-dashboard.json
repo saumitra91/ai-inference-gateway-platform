@@ -108,6 +108,23 @@
         "hide": 0,
         "includeAll": true,
         "multi": true
+      },
+      {
+        "name": "backend",
+        "type": "query",
+        "query": "label_values(inference_backend_chat_requests_total, backend)",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": ""
+        },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
       }
     ]
   },
@@ -2777,6 +2794,303 @@
         }
       },
       "description": "Time to fully process a document (extract, chunk, embed, store)"
+    },
+    {
+      "id": 100,
+      "title": "llama.cpp vs vLLM",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      },
+      "collapsed": false
+    },
+    {
+      "id": 101,
+      "title": "TTFT Comparison (p50/p95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(inference_backend_ttft_seconds_bucket{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend, le))",
+          "legendFormat": "p50 {{backend}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(inference_backend_ttft_seconds_bucket{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend, le))",
+          "legendFormat": "p95 {{backend}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Time to first token separated by backend (p50 and p95)"
+    },
+    {
+      "id": 102,
+      "title": "Upstream Latency Comparison (p50/p95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(inference_backend_upstream_seconds_bucket{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend, le))",
+          "legendFormat": "p50 {{backend}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(inference_backend_upstream_seconds_bucket{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend, le))",
+          "legendFormat": "p95 {{backend}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Total upstream wall time by backend (p50 and p95)"
+    },
+    {
+      "id": 103,
+      "title": "Request Rate by Backend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(inference_backend_chat_requests_total{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend)",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Requests per second by backend"
+    },
+    {
+      "id": 104,
+      "title": "Token Throughput by Backend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(inference_backend_tokens_total{kind=\"completion\",backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend)",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tokps",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Completion tokens per second by backend"
+    },
+    {
+      "id": 105,
+      "title": "Error Rate by Backend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(inference_backend_chat_completions_errors_total{backend=~\"${backend:regex}\"}[$__rate_interval])) by (backend)",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "errps",
+          "custom": {
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Error rate by backend (upstream errors, timeouts, etc.)"
+    },
+    {
+      "id": 106,
+      "title": "Active Requests by Backend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 79
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum(inference_backend_active_requests{backend=~\"${backend:regex}\"}) by (backend)",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Currently active inference requests by backend — compare against INFERENCE_MAX_CONCURRENCY"
+    },
+    {
+      "id": 107,
+      "title": "Streaming Sessions In-Flight by Backend",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 79
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "inference_backend_streaming_in_flight{backend=~\"${backend:regex}\"}",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["max", "mean"],
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Currently active SSE streaming sessions by backend"
     }
   ]
 }

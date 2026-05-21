@@ -94,3 +94,41 @@ groups:
         expr: gateway_process_resident_memory_bytes / 1073741824
       - record: inference:gateway_cpu:1m
         expr: gateway_process_cpu_percent
+
+      # ── Backend comparison (llama.cpp vs vLLM) ────────────────
+      - record: inference:backend_request_rate:1m
+        expr: sum by (backend) (rate(inference_backend_chat_requests_total[1m]))
+      - record: inference:backend_request_rate:5m
+        expr: sum by (backend) (rate(inference_backend_chat_requests_total[5m]))
+      - record: inference:backend_error_rate:5m
+        expr: sum by (backend) (rate(inference_backend_chat_completions_errors_total[5m]))
+      - record: inference:backend_error_ratio:5m
+        expr: sum by (backend) (rate(inference_backend_chat_completions_errors_total[5m])) / (sum by (backend) (rate(inference_backend_chat_requests_total[5m])) + 1)
+
+      - record: inference:backend_ttft_p50:5m
+        expr: histogram_quantile(0.50, sum by (backend, le) (rate(inference_backend_ttft_seconds_bucket[5m])))
+      - record: inference:backend_ttft_p95:5m
+        expr: histogram_quantile(0.95, sum by (backend, le) (rate(inference_backend_ttft_seconds_bucket[5m])))
+      - record: inference:backend_ttft_p99:5m
+        expr: histogram_quantile(0.99, sum by (backend, le) (rate(inference_backend_ttft_seconds_bucket[5m])))
+
+      - record: inference:backend_upstream_latency_p50:5m
+        expr: histogram_quantile(0.50, sum by (backend, le) (rate(inference_backend_upstream_seconds_bucket[5m])))
+      - record: inference:backend_upstream_latency_p95:5m
+        expr: histogram_quantile(0.95, sum by (backend, le) (rate(inference_backend_upstream_seconds_bucket[5m])))
+      - record: inference:backend_upstream_latency_p99:5m
+        expr: histogram_quantile(0.99, sum by (backend, le) (rate(inference_backend_upstream_seconds_bucket[5m])))
+
+      - record: inference:backend_token_throughput:1m
+        expr: sum by (backend) (rate(inference_backend_tokens_total{kind="completion"}[1m]))
+      - record: inference:backend_token_throughput:5m
+        expr: sum by (backend) (rate(inference_backend_tokens_total{kind="completion"}[5m]))
+
+      - record: inference:backend_active_requests:1m
+        expr: sum by (backend) (inference_backend_active_requests)
+      - record: inference:backend_streaming_in_flight:1m
+        expr: sum by (backend) (inference_backend_streaming_in_flight)
+      - record: inference:backend_timeout_rate:5m
+        expr: rate(inference_backend_upstream_timeouts_total[5m])
+      - record: inference:backend_overload_rate:5m
+        expr: rate(inference_backend_rejected_overload_total[5m])

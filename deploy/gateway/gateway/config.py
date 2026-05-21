@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
     upstream_llama_url: str = "http://llamacpp:8080"
+    upstream_vllm_url: str = "http://vllm:8000"
+
+    default_backend: str = "llamacpp"
 
     secret_key: str
     api_key_hmac_pepper: str = ""
