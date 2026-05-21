@@ -67,10 +67,14 @@ services:
       context: ./deploy/vllm
       dockerfile: Dockerfile
     image: local/vllm:latest
+    runtime: nvidia
+    group_add:
+      - "44"
     env_file:
       - path: .env
         required: false
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
       VLLM_MODEL_PATH: /vllm-model
       VLLM_DEVICE: cuda
       VLLM_HOST: "0.0.0.0"
