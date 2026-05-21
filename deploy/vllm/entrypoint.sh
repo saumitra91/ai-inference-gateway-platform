@@ -95,17 +95,6 @@ if [ -z "${_PYTHON}" ]; then
     exit 1
 fi
 
-# GPU-only: fail if CUDA is not available
-if [ "${VLLM_DEVICE}" = "cuda" ]; then
-    log "msg=checking_cuda"
-    if ! "${_PYTHON}" -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"; then
-        log_error "msg=cuda_not_available"
-        log_error "msg=hint ensure NVIDIA Container Toolkit is installed and GPUs are accessible"
-        log_error "msg=hint run: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
-        exit 1
-    fi
-    log "msg=cuda_ok"
-fi
 
 # ── Build the args array (handles empty vars gracefully) ─────────────────
 set -- \
