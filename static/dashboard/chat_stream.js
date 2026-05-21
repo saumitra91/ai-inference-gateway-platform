@@ -26,7 +26,7 @@ function getCookie(name) {
 
 async function* streamChat({ model, system, user, backend, signal }) {
   const body = {
-    model,
+    ...(model ? { model } : {}),
     stream: true,
     messages: [
       { role: "system", content: system },
@@ -97,7 +97,7 @@ function wire() {
 
     try {
       for await (const delta of streamChat({
-        model: model.value || "default",
+        model: model.value,
         backend: backend.value,
         system: system.value,
         user: user.value,

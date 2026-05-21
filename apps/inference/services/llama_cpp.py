@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class LlamaCppBackend:
     """Thin streaming proxy to llama.cpp. No model weights are loaded in this process."""
 
+    UPSTREAM_MODEL: str = "llama-local"
+
     def __init__(self, base_url: str | None = None) -> None:
         configured = base_url or getattr(settings, "LLAMA_CPP_BASE_URL", None)
         if not configured:
@@ -34,14 +36,19 @@ class LlamaCppBackend:
     def _url(self) -> str:
         return f"{self._base_url}/v1/chat/completions"
 
+    def _build_payload(self, request: ChatCompletionRequest, *, stream: bool) -> dict[str, Any]:
+        payload = request.to_upstream_payload()
+        payload["stream"] = stream
+        payload["model"] = self.UPSTREAM_MODEL
+        return payload
+
     async def stream_chat_completion(
         self,
         request: ChatCompletionRequest,
         *,
         extra_headers: dict[str, str] | None = None,
     ) -> AsyncIterator[bytes]:
-        payload: dict[str, Any] = request.to_upstream_payload()
-        payload["stream"] = True
+        payload = self._build_payload(request, stream=True)
 
         client = get_async_client()
         try:
@@ -79,8 +86,7 @@ class LlamaCppBackend:
         *,
         extra_headers: dict[str, str] | None = None,
     ) -> bytes:
-        payload: dict[str, Any] = request.to_upstream_payload()
-        payload["stream"] = False
+        payload = self._build_payload(request, stream=False)
 
         client = get_async_client()
         resp: httpx.Response | None = None

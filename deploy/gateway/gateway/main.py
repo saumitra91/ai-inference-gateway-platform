@@ -346,9 +346,18 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
     upstream_base = backend_url(backend, settings)
     url = f"{upstream_base}/v1/chat/completions"
 
-    # Strip backend field before forwarding upstream
+    # Normalize payload before forwarding upstream
     if payload and isinstance(payload, dict):
         cleaned = strip_backend_field(payload)
+        # Each backend serves a specific model name — translate to the real model name
+        if backend == "vllm":
+            model = cleaned.get("model", "")
+            if model in ("", "default", "llama-vllm"):
+                cleaned["model"] = "vllm-model"
+        elif backend == "llamacpp":
+            model = cleaned.get("model", "")
+            if model in ("", "default", "llama-vllm", "vllm-model"):
+                cleaned["model"] = "llama-local"
         body = json.dumps(cleaned).encode("utf-8")
 
     # ── Concurrency slot (backpressure) ─────────────────────────────────

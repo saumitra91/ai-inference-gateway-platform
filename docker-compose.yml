@@ -125,7 +125,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
       GATEWAY_PERSIST_LOGS: "true"
-      INFERENCE_MAX_CONCURRENCY: "4"
+      INFERENCE_MAX_CONCURRENCY: "16"
+      INFERENCE_QUEUE_SIZE: "50"
     depends_on:
       postgres:
         condition: service_healthy
@@ -157,6 +158,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       USE_REDIS: "true"
       LLAMA_CPP_BASE_URL: http://llamacpp:8080
+      VLLM_BASE_URL: http://vllm:8005
       READINESS_INCLUDE_LLAMA: "true"
       CSRF_TRUSTED_ORIGINS: http://localhost:8888,http://127.0.0.1:8888,http://192.168.1.19:8888
     command: >
