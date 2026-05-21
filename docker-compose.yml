@@ -63,7 +63,6 @@ services:
     restart: unless-stopped
 
   vllm:
-    platform: linux/amd64
     build:
       context: ./deploy/vllm
       dockerfile: Dockerfile
@@ -73,15 +72,13 @@ services:
         required: false
     environment:
       VLLM_MODEL_PATH: Qwen/Qwen2.5-3B-Instruct
-      VLLM_DEVICE: ${VLLM_DEVICE:-cpu}
+      VLLM_DEVICE: cuda
       VLLM_HOST: "0.0.0.0"
       VLLM_PORT: "8000"
       VLLM_DTYPE: ${VLLM_DTYPE:-auto}
       VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-4096}
       VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.90}
       VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 256 --enable-chunked-prefill}
-    volumes:
-      - ./models/vllm:/vllm-model:ro
     expose:
       - "8000"
     healthcheck:
@@ -92,14 +89,13 @@ services:
       start_period: 180s
     mem_limit: ${VLLM_MEM_LIMIT:-8g}
     restart: unless-stopped
-    # Enable for GPU acceleration:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   gateway:
     build:

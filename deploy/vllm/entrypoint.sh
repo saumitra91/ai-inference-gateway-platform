@@ -9,7 +9,7 @@
 #
 # Environment variables:
 #   VLLM_MODEL_PATH  – path to the HuggingFace model directory or model ID
-#   VLLM_DEVICE      – "cpu" (default) or "cuda"
+#   VLLM_DEVICE      – "cuda" (default) or "cpu"
 #   VLLM_PORT        – listen port (default 8000)
 #   VLLM_HOST        – listen address (default 0.0.0.0)
 #   VLLM_DTYPE       – model dtype (default auto)
@@ -36,7 +36,7 @@ log "msg=startup_probe uname_m=$(uname -m) uname_s=$(uname -s)"
 # 1. Defaults
 # ---------------------------------------------------------------------------
 VLLM_MODEL_PATH="${VLLM_MODEL_PATH:-Qwen/Qwen2.5-3B-Instruct}"
-VLLM_DEVICE="${VLLM_DEVICE:-cpu}"
+VLLM_DEVICE="${VLLM_DEVICE:-cuda}"
 VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 VLLM_DTYPE="${VLLM_DTYPE:-auto}"
@@ -47,24 +47,44 @@ VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 # ---------------------------------------------------------------------------
 # 2. Model validation
 # ---------------------------------------------------------------------------
-if [ "${VLLM_DEVICE}" = "cpu" ]; then
+# Detect whether VLLM_MODEL_PATH is a HuggingFace repo ID or a local path
+case "${VLLM_MODEL_PATH}" in
+    /*|./*|../*)
+        _IS_LOCAL=1
+        ;;
+    *)
+        _IS_LOCAL=0
+        ;;
+esac
+
+if [ "${VLLM_DEVICE}" = "cpu" ] && [ "${_IS_LOCAL}" = "1" ]; then
     if [ ! -d "${VLLM_MODEL_PATH}" ]; then
         log_error "msg=model_dir_not_found path=${VLLM_MODEL_PATH}"
         log_error "msg=hint mount a HuggingFace model directory at ${VLLM_MODEL_PATH}"
         log_error "msg=hint example: place model files in ./models/vllm/ on the host"
         exit 1
     fi
-    # Directory exists — check non-empty (vLLM won't accept the path as a repo ID)
+    # Directory exists — check non-empty
     if [ -z "$(ls -A "${VLLM_MODEL_PATH}" 2>/dev/null)" ]; then
         log_error "msg=model_dir_empty path=${VLLM_MODEL_PATH}"
         log_error "msg=hint the directory exists but contains no model files"
-        log_error "msg=hint download a model: git lfs clone https://huggingface.co/microsoft/Phi-3-mini-4k-instruct ./models/vllm/"
+        log_error "msg=hint download a model: git lfs clone https://huggingface.co/Qwen/Qwen2.5-3B-Instruct ./models/vllm/"
         exit 1
     fi
-    log "msg=model_found path=${VLLM_MODEL_PATH} device=cpu"
-else
-    log "msg=model_path_set path=${VLLM_MODEL_PATH} device=cuda"
 fi
+# GPU-only: fail if CUDA is not available
+if [ "${VLLM_DEVICE}" = "cuda" ]; then
+    log "msg=checking_cuda"
+    if ! "${_PYTHON}" -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'"; then
+        log_error "msg=cuda_not_available"
+        log_error "msg=hint ensure NVIDIA Container Toolkit is installed and GPUs are accessible"
+        log_error "msg=hint run: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+        exit 1
+    fi
+    log "msg=cuda_ok"
+fi
+
+log "msg=model_found path=${VLLM_MODEL_PATH} device=${VLLM_DEVICE}"
 
 # ---------------------------------------------------------------------------
 # 3. Startup context log
@@ -97,9 +117,6 @@ set -- \
     --max-model-len "${VLLM_MAX_MODEL_LEN}" \
     --served-model-name vllm-model
 
-if [ -n "${VLLM_DEVICE}" ]; then
-    set -- "$@" --device "${VLLM_DEVICE}"
-fi
 if [ -n "${VLLM_GPU_MEMORY_UTIL}" ] && [ "${VLLM_DEVICE}" = "cuda" ]; then
     set -- "$@" --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTIL}"
 fi
