@@ -115,7 +115,8 @@ set -- \
     --port "${VLLM_PORT}" \
     --dtype "${VLLM_DTYPE}" \
     --max-model-len "${VLLM_MAX_MODEL_LEN}" \
-    --served-model-name vllm-model
+    --served-model-name vllm-model \
+    --served-model-name default
 
 if [ -n "${VLLM_GPU_MEMORY_UTIL}" ] && [ "${VLLM_DEVICE}" = "cuda" ]; then
     set -- "$@" --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTIL}"

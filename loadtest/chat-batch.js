@@ -23,6 +23,7 @@ import { Rate, Trend, Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:8888';
 const API_KEY = __ENV.K6_API_KEY || '';
+const BACKEND = __ENV.K6_BACKEND || '';
 
 const errorRate = new Rate('batch_errors');
 const ttft = new Trend('batch_ttft_ms');
@@ -72,6 +73,7 @@ export default function () {
     max_tokens: 128,
     stream: true,
     temperature: 0.7,
+    ...(BACKEND ? { backend: BACKEND } : {}),
   });
 
   const headers = { 'Content-Type': 'application/json' };

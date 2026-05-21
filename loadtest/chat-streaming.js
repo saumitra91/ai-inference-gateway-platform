@@ -7,6 +7,7 @@
 //   K6_BASE_URL   - target URL (default http://localhost:8888)
 //   K6_VUS        - virtual users (default 5)
 //   K6_DURATION   - test duration (default 3m)
+//   K6_BACKEND    - backend to target: "llamacpp" or "vllm" (default: gateway default)
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -14,6 +15,7 @@ import { Rate, Trend, Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:8888';
 const API_KEY = __ENV.K6_API_KEY || '';
+const BACKEND = __ENV.K6_BACKEND || '';
 
 const streamErrors = new Rate('stream_errors');
 const ttft = new Trend('ttft_ms');
@@ -64,6 +66,7 @@ export default function () {
     max_tokens: 128,
     stream: true,
     temperature: 0.7,
+    ...(BACKEND ? { backend: BACKEND } : {}),
   });
 
   const headers = {

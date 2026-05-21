@@ -9,6 +9,7 @@
 //   K6_BASE_URL  - Gateway URL (default http://localhost:8888)
 //   K6_VUS       - Concurrent VUs (default 4)
 //   K6_DURATION  - Test duration (default 5m)
+//   K6_BACKEND   - Backend override: "llamacpp" or "vllm" (default: llamacpp)
 
 import http from "k6/http";
 import { check, sleep } from "k6";
@@ -18,6 +19,7 @@ const BASE_URL = __ENV.K6_BASE_URL || "http://localhost:8888";
 const API_KEY = __ENV.K6_API_KEY || "";
 const VUS = parseInt(__ENV.K6_VUS || "4", 10);
 const DURATION = __ENV.K6_DURATION || "5m";
+const BACKEND = __ENV.K6_BACKEND || "llamacpp";
 
 const PAYLOAD = JSON.stringify({
   model: "default",
@@ -25,7 +27,7 @@ const PAYLOAD = JSON.stringify({
   stream: true,
   max_tokens: 256,
   temperature: 0.7,
-  backend: "llamacpp",
+  backend: BACKEND,
 });
 
 const HEADERS = {

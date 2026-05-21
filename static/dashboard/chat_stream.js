@@ -24,7 +24,7 @@ function getCookie(name) {
   return "";
 }
 
-async function* streamChat({ model, system, user, signal }) {
+async function* streamChat({ model, system, user, backend, signal }) {
   const body = {
     model,
     stream: true,
@@ -32,6 +32,7 @@ async function* streamChat({ model, system, user, signal }) {
       { role: "system", content: system },
       { role: "user", content: user },
     ],
+    ...(backend ? { backend } : {}),
   };
 
   const csrftoken = getCookie("csrftoken");
@@ -80,10 +81,11 @@ function wire() {
   const send = document.getElementById("send");
   const stop = document.getElementById("stop");
   const model = document.getElementById("model");
+  const backend = document.getElementById("backend");
   const system = document.getElementById("system");
   const user = document.getElementById("user");
 
-  if (!out || !send || !stop || !model || !system || !user) return;
+  if (!out || !send || !stop || !model || !backend || !system || !user) return;
 
   let controller = null;
 
@@ -96,6 +98,7 @@ function wire() {
     try {
       for await (const delta of streamChat({
         model: model.value || "default",
+        backend: backend.value,
         system: system.value,
         user: user.value,
         signal: controller.signal,

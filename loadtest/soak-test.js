@@ -11,6 +11,7 @@ import { Rate, Trend } from 'k6/metrics';
 
 const BASE_URL = __ENV.K6_BASE_URL || 'http://localhost:8888';
 const API_KEY = __ENV.K6_API_KEY || '';
+const BACKEND = __ENV.K6_BACKEND || '';
 
 const errorRate = new Rate('errors');
 const latency = new Trend('latency_ms');
@@ -60,6 +61,7 @@ export default function () {
     max_tokens: isStreaming ? 256 : 64,
     stream: isStreaming,
     temperature: 0.7,
+    ...(BACKEND ? { backend: BACKEND } : {}),
   });
 
   const headers = { 'Content-Type': 'application/json' };
