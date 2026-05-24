@@ -104,7 +104,7 @@ export default function () {
       console.error(`parse error: ${e.message}`);
     }
   } else {
-    console.error(`non-200: status=${res.status} body=${res.body.substring(0, 200)}`);
+    console.error(`non-200: status=${res.status} body=${(res.body || "").substring(0, 200)}`);
   }
 
   sleep(0.2);

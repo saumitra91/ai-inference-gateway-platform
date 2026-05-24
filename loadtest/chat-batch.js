@@ -104,9 +104,11 @@ export default function () {
 
   if (res.status !== 200) {
     errorRate.add(1);
-    console.error(`batch error: status=${res.status} body=${res.body.substring(0, 200)}`);
+    console.error(`batch error: status=${res.status} body=${(res.body || "").substring(0, 200)}`);
     return;
   }
+
+  errorRate.add(0);
 
   const events = res.body.split('\n\n');
   let foundDone = false;

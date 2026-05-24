@@ -43,8 +43,8 @@ const HEADERS = {
 
 const ttft = new Trend("llamacpp_ttft_ms", true);
 const completion_latency = new Trend("llamacpp_completion_latency_ms", true);
-const tokens_per_sec = new Trend("llamacpp_tokens_per_sec", true);
-const response_size = new Trend("llamacpp_response_bytes", true);
+const tokens_per_sec = new Trend("llamacpp_tokens_per_sec", false);
+const response_size = new Trend("llamacpp_response_bytes", false);
 const failures = new Rate("llamacpp_failures");
 const requests = new Counter("llamacpp_requests_total");
 
@@ -69,10 +69,11 @@ export default function () {
 
   if (resp.status !== 200) {
     failures.add(1);
-    console.error(`llamacpp error: status=${resp.status} body=${resp.body.substring(0, 200)}`);
+    console.error(`llamacpp error: status=${resp.status} body=${(resp.body || "").substring(0, 200)}`);
     return;
   }
 
+  failures.add(0);
   const body = resp.body;
   response_size.add(body.length);
 

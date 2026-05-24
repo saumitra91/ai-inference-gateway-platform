@@ -45,14 +45,14 @@ const BACKEND = __VU <= (VUS / 2) ? BACKEND_A : BACKEND_B;
 // llama.cpp metrics
 const l_ttft = new Trend("head2head_llamacpp_ttft_ms", true);
 const l_latency = new Trend("head2head_llamacpp_completion_latency_ms", true);
-const l_tps = new Trend("head2head_llamacpp_tokens_per_sec", true);
+const l_tps = new Trend("head2head_llamacpp_tokens_per_sec", false);
 const l_failures = new Rate("head2head_llamacpp_failures");
 const l_requests = new Counter("head2head_llamacpp_requests_total");
 
 // vLLM metrics
 const v_ttft = new Trend("head2head_vllm_ttft_ms", true);
 const v_latency = new Trend("head2head_vllm_completion_latency_ms", true);
-const v_tps = new Trend("head2head_vllm_tokens_per_sec", true);
+const v_tps = new Trend("head2head_vllm_tokens_per_sec", false);
 const v_failures = new Rate("head2head_vllm_failures");
 const v_requests = new Counter("head2head_vllm_requests_total");
 
@@ -98,15 +98,20 @@ export default function () {
     v_requests.add(1);
   }
 
-  const failed = resp.status !== 200;
-  if (failed) {
+  if (resp.status !== 200) {
     if (BACKEND === "llamacpp") {
       l_failures.add(1);
     } else {
       v_failures.add(1);
     }
-    console.error(`${BACKEND} error: status=${resp.status}`);
+    console.error(`${BACKEND} error: status=${resp.status} body=${(resp.body || "").substring(0, 200)}`);
     return;
+  }
+
+  if (BACKEND === "llamacpp") {
+    l_failures.add(0);
+  } else {
+    v_failures.add(0);
   }
 
   const body = resp.body;

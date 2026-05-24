@@ -89,7 +89,7 @@ export default function () {
   rejectedRate.add(!isOk);
 
   if (!isOk) {
-    console.log(`spike: status=${res.status} body=${res.body.substring(0, 150)}`);
+    console.log(`spike: status=${res.status} body=${(res.body || "").substring(0, 150)}`);
   }
 
   check(res, {

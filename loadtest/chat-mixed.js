@@ -111,6 +111,8 @@ export default function () {
       return;
     }
 
+    streamErrorRate.add(0);
+
     const events = res.body.split('\n\n');
     for (const event of events) {
       if (!event.trim()) continue;

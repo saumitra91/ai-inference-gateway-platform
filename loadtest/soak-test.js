@@ -23,7 +23,7 @@ const BACKEND = __ENV.K6_BACKEND || '';
 const errorRate = new Rate('errors');
 const latency = new Trend('latency_ms');
 const ttft = new Trend('ttft_ms');
-const chunkCount = new Trend('chunks_per_response');
+const chunkCount = new Trend('chunks_per_response', false);
 
 export const options = {
   scenarios: {

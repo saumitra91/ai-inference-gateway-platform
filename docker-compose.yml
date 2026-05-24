@@ -86,10 +86,10 @@ services:
       VLLM_PORT: "8005"
       VLLM_DTYPE: ${VLLM_DTYPE:-auto}
       VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-4096}
-      VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.75}
+      VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.85}
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 24 --enable-chunked-prefill --quantization awq_marlin --enforce-eager}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 48 --enable-chunked-prefill --quantization awq_marlin --enforce-eager}
     expose:
       - "8005"
     healthcheck:

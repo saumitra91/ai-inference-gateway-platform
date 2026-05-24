@@ -96,9 +96,11 @@ export default function () {
 
   if (res.status !== 200) {
     streamErrors.add(1);
-    console.error(`stream error: status=${res.status} body=${res.body.substring(0, 200)}`);
+    console.error(`stream error: status=${res.status} body=${(res.body || "").substring(0, 200)}`);
     return;
   }
+
+  streamErrors.add(0);
 
   // Parse SSE events from response body
   const events = res.body.split('\n\n');
