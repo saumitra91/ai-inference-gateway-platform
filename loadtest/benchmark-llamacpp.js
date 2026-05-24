@@ -1,6 +1,12 @@
 // Benchmark script targeting llama.cpp backend exclusively.
 // Measures TTFT, completion latency, tokens/sec, and request success rate.
 //
+// NOTE: k6's http.post() buffers the full SSE response before returning.
+// TTFT is measured during client-side SSE parsing, AFTER the entire
+// stream is received.  The value approximates full completion latency,
+// NOT true server-side time-to-first-token.  Use the server-side
+// `inference_backend_ttft_seconds` Prometheus metric for accurate TTFT.
+//
 // Usage:
 //   K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-llamacpp.js
 //
@@ -71,8 +77,8 @@ export default function () {
   response_size.add(body.length);
 
   // Parse SSE to find TTFT and token count
-  let firstTokenTime = total; // worst case: no early token
-  let tokenCount = 0;
+  let firstTokenTime = total;
+  let charCount = 0;
   const lines = body.split("\n");
   for (const line of lines) {
     if (!line.startsWith("data: ")) continue;
@@ -87,7 +93,7 @@ export default function () {
           if (firstTokenTime === total) {
             firstTokenTime = Date.now() - t0;
           }
-          tokenCount += delta.content.length;
+          charCount += delta.content.length;
         }
       }
     } catch (e) {
@@ -97,8 +103,8 @@ export default function () {
 
   ttft.add(firstTokenTime);
   completion_latency.add(total);
-  if (total > 0 && tokenCount > 0) {
-    tokens_per_sec.add((tokenCount / 4) / (total / 1000));
+  if (total > 0 && charCount > 0) {
+    tokens_per_sec.add((charCount / 4) / (total / 1000));
   }
 
   sleep(0.1);

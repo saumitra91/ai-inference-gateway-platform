@@ -1,6 +1,12 @@
 // Benchmark script targeting vLLM backend exclusively.
 // Measures TTFT, completion latency, tokens/sec, and request success rate.
 //
+// NOTE: k6's http.post() buffers the full SSE response before returning.
+// TTFT is measured during client-side SSE parsing, AFTER the entire
+// stream is received.  The value approximates full completion latency,
+// NOT true server-side time-to-first-token.  Use the server-side
+// `inference_backend_ttft_seconds` Prometheus metric for accurate TTFT.
+//
 // Usage:
 //   K6_API_KEY="sk_local_..." k6 run loadtest/benchmark-vllm.js
 //
@@ -23,7 +29,7 @@ const BACKEND = __ENV.K6_BACKEND || "vllm";
 
 const PAYLOAD = JSON.stringify({
   model: "default",
-  messages: [{ role: "user", content: "Write a short paragraph about the history of machine learning." }],
+  messages: [{ role: "user", content: "Write a concise paragraph about the history of machine learning." }],
   stream: true,
   max_tokens: 256,
   temperature: 0.7,
@@ -45,6 +51,7 @@ const requests = new Counter("vllm_requests_total");
 export const options = {
   vus: VUS,
   duration: DURATION,
+  gracefulStop: "180s",
   thresholds: {
     vllm_failures: ["rate<0.05"],
   },
@@ -55,7 +62,7 @@ export default function () {
   const t0 = Date.now();
   const resp = http.post(`${BASE_URL}/v1/chat/completions`, PAYLOAD, {
     headers: HEADERS,
-    timeout: "300s",
+    timeout: "600s",
   });
   const total = Date.now() - t0;
 
@@ -63,15 +70,16 @@ export default function () {
 
   if (resp.status !== 200) {
     failures.add(1);
-    console.error(`vllm error: status=${resp.status} body=${resp.body.substring(0, 200)}`);
+    console.error(`vllm error: status=${resp.status} body=${(resp.body || "").substring(0, 200)}`);
     return;
   }
 
+  failures.add(0);
   const body = resp.body;
   response_size.add(body.length);
 
   let firstTokenTime = total;
-  let tokenCount = 0;
+  let charCount = 0;
   const lines = body.split("\n");
   for (const line of lines) {
     if (!line.startsWith("data: ")) continue;
@@ -86,7 +94,7 @@ export default function () {
           if (firstTokenTime === total) {
             firstTokenTime = Date.now() - t0;
           }
-          tokenCount += delta.content.length;
+          charCount += delta.content.length;
         }
       }
     } catch (e) {
@@ -96,8 +104,8 @@ export default function () {
 
   ttft.add(firstTokenTime);
   completion_latency.add(total);
-  if (total > 0 && tokenCount > 0) {
-    tokens_per_sec.add((tokenCount / 4) / (total / 1000));
+  if (total > 0 && charCount > 0) {
+    tokens_per_sec.add((charCount / 4) / (total / 1000));
   }
 
   sleep(0.1);

@@ -89,7 +89,7 @@ services:
       VLLM_GPU_MEMORY_UTIL: ${VLLM_GPU_MEMORY_UTIL:-0.75}
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 64 --enable-chunked-prefill --quantization awq_marlin --enforce-eager}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 24 --enable-chunked-prefill --quantization awq_marlin --enforce-eager}
     expose:
       - "8005"
     healthcheck:
@@ -125,8 +125,10 @@ services:
       SECRET_KEY: ${SECRET_KEY:-unsafe-development-secret-key}
       API_KEY_HMAC_PEPPER: ${API_KEY_HMAC_PEPPER:-}
       GATEWAY_PERSIST_LOGS: "true"
-      INFERENCE_MAX_CONCURRENCY: "16"
-      INFERENCE_QUEUE_SIZE: "50"
+      INFERENCE_MAX_CONCURRENCY: "48"
+      INFERENCE_QUEUE_SIZE: "256"
+      INFERENCE_QUEUE_TIMEOUT_S: "600"
+      BATCH_MAX_SIZE: "128"
     depends_on:
       postgres:
         condition: service_healthy

@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     batch_window_ms: float = 50.0
     batch_max_size: int = 8
 
+    # HTTP client (httpx) connection settings
+    http_connect_timeout_s: float = 30.0
+    http_read_timeout_s: float = 600.0
+    http_write_timeout_s: float = 60.0
+    http_pool_timeout_s: float = 30.0
+    http_max_connections: int = 256
+    http_max_keepalive_connections: int = 128
+
     def dsn_asyncpg(self) -> str:
         u = self.database_url
         if u.startswith("postgres://"):

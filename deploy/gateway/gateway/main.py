@@ -111,7 +111,18 @@ async def lifespan(app: FastAPI):
     _ = app
     state.pool = await asyncpg.create_pool(settings.dsn_asyncpg(), min_size=1, max_size=10)
     state.redis = redis_from_url(settings.redis_url, decode_responses=False)
-    state.http = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=600.0, write=60.0, pool=5.0))
+    state.http = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=settings.http_connect_timeout_s,
+            read=settings.http_read_timeout_s,
+            write=settings.http_write_timeout_s,
+            pool=settings.http_pool_timeout_s,
+        ),
+        limits=httpx.Limits(
+            max_connections=settings.http_max_connections,
+            max_keepalive_connections=settings.http_max_keepalive_connections,
+        ),
+    )
     state.batcher = BatchBarrier(
         window_ms=settings.batch_window_ms,
         max_batch_size=settings.batch_max_size,
@@ -388,6 +399,7 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
             t0 = time.perf_counter()
             ttft: float | None = None
             total_bytes = 0
+            content_chars = 0
             est_tokens = 0
             status = 200
             err = ""
@@ -408,6 +420,14 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                             BACKEND_TTFT_SECONDS.labels(backend=backend).observe(ttft - t0)
                         total_bytes += len(chunk)
                         BACKEND_BYTES_TOTAL.labels(backend=backend).inc(len(chunk))
+                        try:
+                            for _line in chunk.decode("utf-8").split("\n"):
+                                if _line.startswith("data: ") and "content" in _line:
+                                    _payload = json.loads(_line[6:])
+                                    for _ch in _payload.get("choices") or []:
+                                        content_chars += len(((_ch.get("delta") or {}).get("content")) or "")
+                        except Exception:
+                            pass
                         yield chunk
             except asyncio.CancelledError:
                 status = 499
@@ -446,12 +466,12 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                     BACKEND_ACTIVE_REQUESTS.labels(backend=backend, mode="programmatic").dec()
                     STREAMING_DURATION_SECONDS.observe(elapsed)
                     BACKEND_STREAMING_DURATION_SECONDS.labels(backend=backend).observe(elapsed)
-                    est_tokens = max(0, int(total_bytes // 4))
+                    est_tokens = max(0, int(content_chars // 4))
                     if est_tokens > 0:
                         STREAM_TOKENS.labels(kind="completion").inc(est_tokens)
                         BACKEND_STREAM_TOKENS.labels(backend=backend, kind="completion").inc(est_tokens)
                     ttft_ms = int((ttft - t0) * 1000) if ttft else None
-                    est_tps = (total_bytes / max(elapsed, 1e-9)) / 4.0
+                    est_tps = (content_chars / max(elapsed, 1e-9)) / 4.0
                     queue_wait_ms = int(wait_time * 1000) if wait_time else 0
                     batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
                     log.info(
@@ -528,9 +548,10 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
                 usage = parsed.get("usage") if isinstance(parsed, dict) else None
                 if isinstance(usage, dict):
                     ctok_final = int(usage.get("completion_tokens") or 0)
+                if ctok_final == 0 and status < 400:
+                    text = (parsed.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                    ctok_final = max(1, len(text) // 4)
             except Exception:
-                ctok_final = 0
-            if ctok_final == 0 and status < 400:
                 ctok_final = max(1, len(out) // 200)
         except httpx.ReadTimeout as exc:
             status = 504
@@ -562,7 +583,7 @@ async def chat_completions(request: Request, ctx: APIKeyDep) -> Response:
         if ctok_final > 0:
             STREAM_TOKENS.labels(kind="completion").inc(ctok_final)
             BACKEND_STREAM_TOKENS.labels(backend=backend, kind="completion").inc(ctok_final)
-        tps = (len(out) / max(elapsed, 1e-9)) / 200.0
+        tps = ctok_final / max(elapsed, 1e-9)
         queue_wait_ms = int(wait_time * 1000) if wait_time else 0
         batch_wait_ms = int(batch_wait * 1000) if batch_wait else 0
         log.info(

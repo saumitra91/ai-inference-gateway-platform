@@ -313,8 +313,12 @@ class ChatCompletionService:
                         ptok_usage = int(usage.get("prompt_tokens") or 0)
                         if ptok_usage > 0:
                             ptok_est = ptok_usage
+                    elif isinstance(parsed, dict):
+                        text = parsed.get("choices", [{}])[0].get("message", {}).get("content") or ""
+                        completion_tokens = rough_token_estimate_from_chars(len(text))
                 except Exception:
-                    completion_tokens = max(1, rough_token_estimate_from_chars(len(body)))
+                    body_len = len(body)
+                    completion_tokens = max(1, body_len // 200) if body_len > 0 else 1
             except UpstreamTimeoutError:
                 UPSTREAM_TIMEOUTS.inc()
                 CHAT_COMPLETION_ERRORS.labels(kind="upstream_timeout").inc()

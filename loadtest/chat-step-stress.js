@@ -30,8 +30,6 @@ const BACKEND = __ENV.K6_BACKEND || '';
 
 const errorRate = new Rate('stress_errors');
 const rejectedRate = new Rate('stress_rejected');
-const queueWait = new Trend('stress_queue_wait_ms');
-const ttft = new Trend('stress_ttft_ms');
 
 export const options = {
   scenarios: {

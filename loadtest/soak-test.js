@@ -1,4 +1,11 @@
 // k6 soak test — sustained load over time to detect degradation
+//
+// NOTE: k6's http.post() buffers the full SSE response before returning.
+// TTFT is measured during client-side SSE parsing, AFTER the entire
+// stream is received.  The value approximates full completion latency,
+// NOT true server-side time-to-first-token.  Use the server-side
+// `inference_backend_ttft_seconds` Prometheus metric for accurate TTFT.
+//
 // Usage:
 //   K6_API_KEY="sk_local_..." k6 run loadtest/soak-test.js
 //
