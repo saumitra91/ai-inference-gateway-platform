@@ -43,15 +43,15 @@ const HEADERS = {
 
 const ttft = new Trend("vllm_ttft_ms", true);
 const completion_latency = new Trend("vllm_completion_latency_ms", true);
-const tokens_per_sec = new Trend("vllm_tokens_per_sec", true);
-const response_size = new Trend("vllm_response_bytes", true);
+const tokens_per_sec = new Trend("vllm_tokens_per_sec", false);
+const response_size = new Trend("vllm_response_bytes", false);
 const failures = new Rate("vllm_failures");
 const requests = new Counter("vllm_requests_total");
 
 export const options = {
   vus: VUS,
   duration: DURATION,
-  gracefulStop: "180s",
+  gracefulStop: "600s",
   thresholds: {
     vllm_failures: ["rate<0.05"],
   },
