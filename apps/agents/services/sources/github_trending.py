@@ -21,7 +21,7 @@ class GitHubTrendingSource(BaseSource):
         items: list[SourceItem] = []
         error: str | None = None
         try:
-            language = query.strip() if query else ""
+            language = query.strip() if query and len(query.strip()) < 30 else ""
             url = "https://github.com/trending"
             if language:
                 url += f"/{language}"

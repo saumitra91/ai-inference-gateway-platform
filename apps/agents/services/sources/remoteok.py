@@ -21,7 +21,7 @@ class RemoteOKSource(BaseSource):
         error: str | None = None
         try:
             params = {}
-            if query:
+            if query and len(query.strip()) < 40:
                 params["tags"] = query
             resp = self._client.get(
                 "https://remoteok.com/api",

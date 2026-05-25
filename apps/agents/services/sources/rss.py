@@ -19,7 +19,7 @@ class RSSSource(BaseSource):
     async def fetch(self, query: str, max_results: int = 25) -> SourceResult:
         items: list[SourceItem] = []
         error: str | None = None
-        feed_urls = [u.strip() for u in query.split(",") if u.strip()] if query else []
+        feed_urls = [u.strip() for u in query.split(",") if u.strip() and u.strip().startswith(("http://", "https://"))] if query else []
         if not feed_urls:
             return SourceResult(items=[], source_name=self.name, error="No RSS URLs provided")
 

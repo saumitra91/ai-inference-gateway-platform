@@ -20,7 +20,7 @@ class LeverSource(BaseSource):
         items: list[SourceItem] = []
         error: str | None = None
         try:
-            board_name = query.strip() if query else "nvidia"
+            board_name = query.strip() if query and "," not in query and len(query.strip().split()) <= 3 and len(query.strip()) < 25 else "nvidia"
             resp = self._client.get(
                 f"https://api.lever.co/v0/postings/{board_name}",
                 params={"mode": "json"},

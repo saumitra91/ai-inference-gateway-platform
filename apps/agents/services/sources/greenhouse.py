@@ -20,7 +20,7 @@ class GreenhouseSource(BaseSource):
         items: list[SourceItem] = []
         error: str | None = None
         try:
-            board_token = query.strip() if query else "nvidia"
+            board_token = query.strip() if query and "," not in query and len(query.strip().split()) <= 3 and len(query.strip()) < 25 else "nvidia"
             resp = self._client.get(
                 f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs",
                 params={"content": "true", "per_page": min(max_results, 50)},

@@ -58,28 +58,28 @@ class YCJobsSource(BaseSource):
                 "https://www.workatastartup.com/companies",
                 params={"limit": min(max_results, 50)},
             )
-            resp2.raise_for_status()
-            try:
-                data2 = resp2.json()
-                companies = data2 if isinstance(data2, list) else data2.get("companies", [])
-                for company in companies[:max_results]:
-                    name = company.get("name", "")
-                    items.append(
-                        SourceItem(
-                            title=f"{name} - {company.get('one_liner', '')}",
-                            url=f"https://www.workatastartup.com/companies/{company.get('id', '')}",
-                            source=self.name,
-                            content=company.get("description", "") or "",
-                            metadata={
-                                "company": name,
-                                "location": company.get("location", ""),
-                                "team_size": company.get("team_size", ""),
-                                "tags": company.get("tags", []),
-                            },
+            if resp2.status_code == 200:
+                try:
+                    data2 = resp2.json()
+                    companies = data2 if isinstance(data2, list) else data2.get("companies", [])
+                    for company in companies[:max_results]:
+                        name = company.get("name", "")
+                        items.append(
+                            SourceItem(
+                                title=f"{name} - {company.get('one_liner', '')}",
+                                url=f"https://www.workatastartup.com/companies/{company.get('id', '')}",
+                                source=self.name,
+                                content=company.get("description", "") or "",
+                                metadata={
+                                    "company": name,
+                                    "location": company.get("location", ""),
+                                    "team_size": company.get("team_size", ""),
+                                    "tags": company.get("tags", []),
+                                },
+                            )
                         )
-                    )
-            except (ValueError, TypeError):
-                pass
+                except (ValueError, TypeError):
+                    pass
         except httpx.RequestError as exc:
             error = str(exc)
             logger.warning("YC Jobs fetch failed: %s", exc)
