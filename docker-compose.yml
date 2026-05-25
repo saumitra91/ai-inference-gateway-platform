@@ -235,6 +235,34 @@ services:
     restart: unless-stopped
     mem_limit: 1g
 
+  agents-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.development
+      DATABASE_URL: postgres://platform:platform@postgres:5432/platform
+      REDIS_URL: redis://redis:6379/0
+      USE_REDIS: "true"
+      LLAMA_CPP_BASE_URL: http://llamacpp:8080
+      VLLM_BASE_URL: http://vllm:8005
+      AGENTS_SCHEDULER_ENABLED: "true"
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py run_agent_scheduler"
+    volumes:
+      - .:/app:rw
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 512m
+
   grafana:
     image: grafana/grafana:11.2.0
     environment:

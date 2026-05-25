@@ -1,0 +1,119 @@
+{
+  "title": "Agents & Automation",
+  "uid": "agents-automation",
+  "tags": ["agents", "automation"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Agent Run Rate (1m)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(agent_runs_total[1m]))", "legendFormat": "runs/s"}],
+      "gridPos": {"w": 4, "h": 6, "x": 0, "y": 0}
+    },
+    {
+      "title": "Active Runs",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(agent_active_runs)", "legendFormat": "active"}],
+      "gridPos": {"w": 4, "h": 6, "x": 4, "y": 0}
+    },
+    {
+      "title": "Error Rate (5m)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(agent_failures_total[5m]))", "legendFormat": "errors/s"}],
+      "gridPos": {"w": 4, "h": 6, "x": 8, "y": 0},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"value": 0, "color": "green"}, {"value": 0.1, "color": "red"}]}}}
+    },
+    {
+      "title": "Telegram Delivery",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(telegram_notifications_sent_total[5m]))", "legendFormat": "sent"}],
+      "gridPos": {"w": 4, "h": 6, "x": 12, "y": 0}
+    },
+    {
+      "title": "Results Discovery Rate (1m)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(agent_results_discovered_total[1m]))", "legendFormat": "discoveries/s"}],
+      "gridPos": {"w": 4, "h": 6, "x": 16, "y": 0}
+    },
+    {
+      "title": "Duplicate Filter Rate (5m)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rate(agent_duplicate_results_filtered_total[5m])", "legendFormat": "filtered/s"}],
+      "gridPos": {"w": 4, "h": 6, "x": 20, "y": 0}
+    },
+    {
+      "title": "Run Duration (p50/p95)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "agent:run_duration_p50:5m", "legendFormat": "p50"},
+        {"expr": "agent:run_duration_p95:5m", "legendFormat": "p95"}
+      ],
+      "gridPos": {"w": 8, "h": 8, "x": 0, "y": 6}
+    },
+    {
+      "title": "Agent Runs per Type",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (agent_type) (rate(agent_runs_total{status=\"completed\"}[5m]))", "legendFormat": "{{agent_type}}"}
+      ],
+      "gridPos": {"w": 8, "h": 8, "x": 8, "y": 6}
+    },
+    {
+      "title": "Source Fetch Latency (p50)",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "agent:source_fetch_p50:5m", "legendFormat": "p50"}
+      ],
+      "gridPos": {"w": 8, "h": 8, "x": 16, "y": 6}
+    },
+    {
+      "title": "Runs by Agent",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (agent_name) (rate(agent_runs_total{status=\"completed\"}[24h]))", "legendFormat": "{{agent_name}}"}],
+      "gridPos": {"w": 8, "h": 8, "x": 0, "y": 14}
+    },
+    {
+      "title": "Discoveries by Source",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (source) (rate(agent_results_discovered_total[24h]))", "legendFormat": "{{source}}"}],
+      "gridPos": {"w": 8, "h": 8, "x": 8, "y": 14}
+    },
+    {
+      "title": "Telegram Success vs Failure",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(rate(telegram_notifications_sent_total[5m]))", "legendFormat": "success"},
+        {"expr": "sum(rate(telegram_notification_failures_total[5m]))", "legendFormat": "failure"}
+      ],
+      "gridPos": {"w": 8, "h": 8, "x": 16, "y": 14}
+    },
+    {
+      "title": "LLM Token Usage",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (backend) (rate(agent_llm_requests_total[5m]))", "legendFormat": "{{backend}}"}],
+      "gridPos": {"w": 12, "h": 8, "x": 0, "y": 22}
+    },
+    {
+      "title": "Discovery Rate by Agent Type",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (agent_type) (rate(agent_results_discovered_total[5m]))", "legendFormat": "{{agent_type}}"}
+      ],
+      "gridPos": {"w": 12, "h": 8, "x": 12, "y": 22}
+    }
+  ]
+}

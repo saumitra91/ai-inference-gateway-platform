@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div style="display:flex;justify-content:space-between;align-items:start;">
+    <div>
+      <h1>{{ agent.name }}</h1>
+      <p class="muted">{{ agent.get_type_display }} — {{ agent.slug }}</p>
+    </div>
+    <div>
+      <span class="pill {% if agent.enabled %}ok{% else %}warn{% endif %}">
+        {{ agent.enabled|yesno:"enabled,disabled" }}
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Details</h2>
+    <div class="small muted">
+      <p><strong>Type:</strong> {{ agent.get_type_display }}</p>
+      <p><strong>Instructions:</strong> {{ agent.instructions|truncatewords:50 }}</p>
+      <p><strong>Search Query:</strong> {{ agent.search_query|default:"—" }}</p>
+      <p><strong>Sources:</strong> {{ agent.sources|join:", "|default:"—" }}</p>
+      <p><strong>Max Results:</strong> {{ agent.max_results }}</p>
+      <p><strong>LLM Backend:</strong> {{ agent.llm_backend_preference }}</p>
+      <p><strong>Schedule:</strong> {{ agent.schedule_cron|default:"Manual only" }}</p>
+      <p><strong>Digest:</strong> {{ agent.get_digest_frequency_display }}</p>
+      <p><strong>Last Run:</strong> <span id="last-run">{{ agent.last_run_at|timesince|default:"Never" }}</span> ago</p>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button id="run-btn" class="btn primary" onclick="runAgent('{{ agent.id }}')">Run Now</button>
+      <span id="run-spinner" class="spinner" style="display:none;"></span>
+      <span id="run-status" class="small muted" style="display:none;"></span>
+      <form method="post" action="{% url 'agents:toggle_enabled' agent_id=agent.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="enabled" value="{{ agent.enabled|yesno:'false,true' }}">
+        <button class="btn" type="submit">{{ agent.enabled|yesno:"Disable,Enable" }}</button>
+      </form>
+      <a class="btn" href="{% url 'agents:edit' agent_id=agent.id %}">Edit</a>
+      <form method="post" action="{% url 'agents:delete' agent_id=agent.id %}" onsubmit="return confirm('Delete this agent?')">
+        {% csrf_token %}
+        <button class="btn" style="border-color:rgba(255,107,107,0.35);color:var(--danger);" type="submit">Delete</button>
+      </form>
+    </div>
+    <div id="run-result" style="margin-top:12px;display:none;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Recent Runs</h2>
+    <div id="runs-table">
+      {% if runs %}
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr class="small muted">
+              <th style="text-align:left;padding:6px 8px;">Status</th>
+              <th style="text-align:left;padding:6px 8px;">Started</th>
+              <th style="text-align:left;padding:6px 8px;">Duration</th>
+              <th style="text-align:left;padding:6px 8px;">Results</th>
+              <th style="text-align:left;padding:6px 8px;">Sent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in runs %}
+              <tr class="small">
+                <td style="padding:6px 8px;">
+                  <span class="pill {% if run.status == 'completed' %}ok{% elif run.status == 'failed' %}warn{% elif run.status == 'running' %}info{% endif %}">
+                    {{ run.status }}
+                  </span>
+                </td>
+                <td style="padding:6px 8px;">{{ run.started_at|timesince }} ago</td>
+                <td style="padding:6px 8px;">{% if run.duration_ms %}{{ run.duration_ms|floatformat:0 }}ms{% else %}—{% endif %}</td>
+                <td style="padding:6px 8px;">{{ run.discovered_count }}</td>
+                <td style="padding:6px 8px;">{{ run.sent_count }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted small">No runs yet. Click "Run Now" to start.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<style>
+.spinner {
+  width:18px;height:18px;
+  border:2px solid var(--border);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:spin .8s linear infinite;
+  display:inline-block;
+  vertical-align:middle;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+#run-result.success { border-left:3px solid var(--ok); padding:10px; background:rgba(94,245,193,0.08); border-radius:6px; }
+#run-result.fail { border-left:3px solid var(--danger); padding:10px; background:rgba(255,107,107,0.08); border-radius:6px; }
+#run-result pre { margin:6px 0 0; font-size:11px; white-space:pre-wrap; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+let runPollTimer = null;
+
+function runAgent(agentId) {
+  const btn = document.getElementById('run-btn');
+  const spinner = document.getElementById('run-spinner');
+  const status = document.getElementById('run-status');
+  const result = document.getElementById('run-result');
+
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  spinner.style.display = 'inline-block';
+  status.style.display = 'inline';
+  status.textContent = 'Starting...';
+  result.style.display = 'none';
+  result.className = '';
+  result.innerHTML = '';
+
+  // Poll for latest run status
+  runPollTimer = setInterval(() => pollRunStatus(agentId), 3000);
+
+  // Send the run request
+  fetch('{% url "agents:run_now" agent_id=agent.id %}', {
+    method: 'POST',
+    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+  })
+  .then(r => r.json())
+  .then(data => {
+    clearInterval(runPollTimer);
+    runPollTimer = null;
+    spinner.style.display = 'none';
+    status.style.display = 'none';
+
+    if (data.status === 'completed') {
+      btn.textContent = 'Run Now';
+      btn.disabled = false;
+      result.className = 'success';
+      result.style.display = 'block';
+      result.innerHTML = '<strong>✅ Run completed</strong><br><span class="small muted">'
+        + data.discovered_count + ' results in ' + (data.duration_ms / 1000).toFixed(1) + 's'
+        + (data.sent_count ? ' · ' + data.sent_count + ' sent via Telegram' : '')
+        + '</span>';
+      refreshRunsTable(agentId);
+      document.getElementById('last-run').textContent = 'just now';
+    } else if (data.status === 'failed') {
+      btn.textContent = 'Run Now';
+      btn.disabled = false;
+      result.className = 'fail';
+      result.style.display = 'block';
+      result.innerHTML = '<strong>❌ Run failed</strong><br><span class="small muted">'
+        + (data.error || 'Unknown error') + '</span>';
+      refreshRunsTable(agentId);
+    } else {
+      // skipped or other
+      btn.textContent = 'Run Now';
+      btn.disabled = false;
+      result.style.display = 'none';
+    }
+  })
+  .catch(err => {
+    clearInterval(runPollTimer);
+    runPollTimer = null;
+    btn.textContent = 'Run Now';
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    status.style.display = 'none';
+    result.className = 'fail';
+    result.style.display = 'block';
+    result.innerHTML = '<strong>❌ Request failed</strong><br><span class="small muted">' + err.message + '</span>';
+  });
+}
+
+function pollRunStatus(agentId) {
+  const status = document.getElementById('run-status');
+  fetch('/agents/api/agents/' + agentId + '/run/latest')
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'running') {
+        status.textContent = 'Running...';
+      } else if (data.status === 'completed' || data.status === 'failed') {
+        // Don't override the final result — the main request will handle it
+      }
+    })
+    .catch(() => {});
+}
+
+function refreshRunsTable(agentId) {
+  // Fetch runs list via the runs API and rebuild the table
+  fetch('/agents/api/agents/' + agentId + '/runs')
+    .then(r => r.json())
+    .then(data => {
+      const container = document.getElementById('runs-table');
+      if (!data.runs || data.runs.length === 0) {
+        container.innerHTML = '<p class="muted small">No runs yet.</p>';
+        return;
+      }
+      let html = `<table style="width:100%;border-collapse:collapse;">
+        <thead><tr class="small muted">
+          <th style="text-align:left;padding:6px 8px;">Status</th>
+          <th style="text-align:left;padding:6px 8px;">Started</th>
+          <th style="text-align:left;padding:6px 8px;">Duration</th>
+          <th style="text-align:left;padding:6px 8px;">Results</th>
+          <th style="text-align:left;padding:6px 8px;">Sent</th>
+        </tr></thead><tbody>`;
+      data.runs.forEach(r => {
+        const statusClass = r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'warn' : 'info';
+        const dur = r.duration_ms ? (r.duration_ms / 1000).toFixed(1) + 's' : '—';
+        html += `<tr class="small">
+          <td style="padding:6px 8px;"><span class="pill ${statusClass}">${r.status}</span></td>
+          <td style="padding:6px 8px;">${timeAgo(r.started_at)}</td>
+          <td style="padding:6px 8px;">${dur}</td>
+          <td style="padding:6px 8px;">${r.discovered_count || 0}</td>
+          <td style="padding:6px 8px;">${r.sent_count || 0}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    })
+    .catch(() => {});
+}
+
+function timeAgo(isoStr) {
+  if (!isoStr) return '—';
+  const sec = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
+  if (sec < 5) return 'just now';
+  if (sec < 60) return sec + 's ago';
+  const min = Math.floor(sec / 60);
+  return min + 'm ago';
+}
+</script>
+{% endblock %}

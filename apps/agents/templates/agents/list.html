@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Agents{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Agents</h1>
+  <p class="muted">Manage autonomous research and job discovery agents.</p>
+  <div class="row">
+    <a class="btn primary" href="{% url 'agents:create' %}">+ New Agent</a>
+    <a class="btn" href="{% url 'agents:results' %}">All Results</a>
+    <a class="btn" href="{% url 'agents:telegram' %}">Telegram Config</a>
+  </div>
+</div>
+<div class="grid">
+  {% for agent in agents %}
+    <div class="card" id="agent-card-{{ agent.id }}">
+      <div style="display:flex;justify-content:space-between;align-items:start;">
+        <h2><a href="{% url 'agents:detail' agent_id=agent.id %}" style="color:var(--accent);text-decoration:none;">{{ agent.name }}</a></h2>
+        <div>
+          <span class="pill {% if agent.enabled %}ok{% else %}warn{% endif %}">
+            {{ agent.enabled|yesno:"enabled,disabled" }}
+          </span>
+        </div>
+      </div>
+      <div class="small muted" style="margin-bottom:8px;">
+        {{ agent.get_type_display }} — {{ agent.schedule_cron|default:"manual only" }}
+      </div>
+      <div class="small muted">
+        {% if agent.last_run_at %}
+          Last run: <span class="last-run-ago">{{ agent.last_run_at|timesince }} ago</span>
+        {% else %}
+          <span class="last-run-ago">Never run</span>
+        {% endif %}
+        <br>
+        Digest: {{ agent.get_digest_frequency_display }}
+        {% if agent.sources %} — Sources: {{ agent.sources|join:", " }}{% endif %}
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+        <button class="btn primary" onclick="runAgent('{{ agent.id }}', this)" {% if not agent.enabled %}disabled{% endif %}>Run Now</button>
+        <span class="list-spinner" style="display:none;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;"></span>
+        <span class="list-status small muted" style="display:none;"></span>
+        <form method="post" action="{% url 'agents:toggle_enabled' agent_id=agent.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="enabled" value="{{ agent.enabled|yesno:'false,true' }}">
+          <button class="btn" type="submit">{{ agent.enabled|yesno:"Disable,Enable" }}</button>
+        </form>
+        <a class="btn" href="{% url 'agents:detail' agent_id=agent.id %}">Details</a>
+      </div>
+    </div>
+  {% empty %}
+    <div class="card span-2">
+      <p class="muted">No agents yet. <a href="{% url 'agents:create' %}">Create your first agent</a>.</p>
+    </div>
+  {% endfor %}
+</div>
+<style>
+@keyframes spin { to { transform:rotate(360deg); } }
+.list-spinner { vertical-align:middle; }
+.list-status { vertical-align:middle; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+window._csrf = '{{ csrf_token }}';
+
+function runAgent(agentId, btn) {
+  const card = document.getElementById('agent-card-' + agentId);
+  const spinner = card.querySelector('.list-spinner');
+  const status = card.querySelector('.list-status');
+
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  spinner.style.display = 'inline-block';
+  status.style.display = 'inline';
+  status.textContent = 'Starting...';
+
+  fetch('/agents/' + agentId + '/run', {
+    method: 'POST',
+    headers: {'X-CSRFToken': window._csrf},
+  })
+  .then(r => r.json())
+  .then(data => {
+    spinner.style.display = 'none';
+    status.style.display = 'none';
+    btn.textContent = 'Run Now';
+    btn.disabled = false;
+
+    if (data.status === 'completed') {
+      const ago = card.querySelector('.last-run-ago');
+      if (ago) ago.textContent = 'just now';
+      status.style.display = 'inline';
+      status.textContent = '✅ ' + data.discovered_count + ' results';
+      setTimeout(() => { status.style.display = 'none'; }, 5000);
+    } else if (data.status === 'failed') {
+      status.style.display = 'inline';
+      status.style.color = 'var(--danger)';
+      status.textContent = '❌ ' + (data.error || 'failed');
+    } else {
+      status.style.display = 'none';
+    }
+  })
+  .catch(err => {
+    spinner.style.display = 'none';
+    btn.textContent = 'Run Now';
+    btn.disabled = false;
+    status.style.display = 'inline';
+    status.style.color = 'var(--danger)';
+    status.textContent = '❌ ' + err.message;
+  });
+}
+</script>
+{% endblock %}

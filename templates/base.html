@@ -16,6 +16,10 @@
         <nav class="nav">
           <a href="{% url 'dashboard:home' %}">Overview</a>
           <a href="{% url 'dashboard:chat' %}">Chat</a>
+          {% url 'agents:list' as agents_list_url %}
+          {% if agents_list_url %}<a href="{{ agents_list_url }}">Agents</a>{% endif %}
+          {% url 'agents:results' as agents_results_url %}
+          {% if agents_results_url %}<a href="{{ agents_results_url }}">Agent Results</a>{% endif %}
           <a href="{% url 'rag:chat' %}">RAG Chat</a>
           <a href="{% url 'rag:documents' %}">RAG Documents</a>
           {% if user.is_staff %}

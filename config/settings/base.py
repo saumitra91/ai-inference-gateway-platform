@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     "apps.benchmarks",
     "apps.rag",
     "apps.dashboard",
+    "apps.agents",
 ]
 
 MIDDLEWARE = [
@@ -224,6 +225,16 @@ LLAMA_CPP_BASE_URL = os.environ.get("LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8005")
 
 DEFAULT_INFERENCE_BACKEND = os.environ.get("DEFAULT_INFERENCE_BACKEND", "llamacpp")
+
+# ── Agent settings ────────────────────────────────────────────────
+AGENTS_ENABLED = _env_bool("AGENTS_ENABLED", default=True)
+AGENTS_SCHEDULER_ENABLED = _env_bool("AGENTS_SCHEDULER_ENABLED", default=True)
+AGENTS_DEFAULT_LLM_BACKEND = os.environ.get("AGENTS_DEFAULT_LLM_BACKEND", "llamacpp")
+AGENTS_EMBEDDING_MODEL = os.environ.get("AGENTS_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+AGENTS_SIMILARITY_THRESHOLD = float(os.environ.get("AGENTS_SIMILARITY_THRESHOLD", "0.92"))
+AGENTS_MAX_RUN_TIMEOUT_S = int(os.environ.get("AGENTS_MAX_RUN_TIMEOUT_S", "600"))
+AGENTS_FETCH_TIMEOUT_S = int(os.environ.get("AGENTS_FETCH_TIMEOUT_S", "30"))
+AGENTS_MAX_RESULTS_PER_SOURCE = int(os.environ.get("AGENTS_MAX_RESULTS_PER_SOURCE", "50"))
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 LOGGING = {

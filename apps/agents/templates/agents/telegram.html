@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Telegram Configuration{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Telegram Configuration</h1>
+  <p class="muted">Configure Telegram bot for agent digest notifications.</p>
+</div>
+
+<div class="grid">
+  <div class="card span-2">
+    <form id="telegram-form" style="display:grid;gap:14px;">
+      {% csrf_token %}
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Enabled</label>
+        <label><input type="checkbox" name="enabled" {% if config and config.enabled %}checked{% endif %}> Enable Telegram notifications</label>
+      </div>
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Bot Token</label>
+        <input class="input" name="bot_token" value="{{ config.bot_token|default:"" }}" placeholder="123456789:ABCdefGHIjklmNOPqrstUVwxyz">
+      </div>
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Chat ID</label>
+        <input class="input" name="chat_id" value="{{ config.chat_id|default:"" }}" placeholder="-1234567890 or @username">
+      </div>
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Digest Notifications</label>
+        <label><input type="checkbox" name="digest_enabled" {% if config and config.digest_enabled %}checked{% endif %}> Send digest notifications</label>
+      </div>
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Digest Schedule</label>
+        <select class="input" name="digest_schedule">
+          <option value="real_time" {% if config and config.digest_schedule == "real_time" %}selected{% endif %}>Real Time</option>
+          <option value="hourly" {% if config and config.digest_schedule == "hourly" %}selected{% endif %}>Hourly</option>
+          <option value="daily" {% if config and config.digest_schedule == "daily" %}selected{% endif %}>Daily</option>
+          <option value="weekly" {% if config and config.digest_schedule == "weekly" %}selected{% endif %}>Weekly</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="btn primary" type="submit">Save Configuration</button>
+        <a class="btn" href="{% url 'agents:list' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('telegram-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const body = JSON.stringify({
+    enabled: form.querySelector('[name="enabled"]').checked,
+    bot_token: form.querySelector('[name="bot_token"]').value,
+    chat_id: form.querySelector('[name="chat_id"]').value,
+    digest_enabled: form.querySelector('[name="digest_enabled"]').checked,
+    digest_schedule: form.querySelector('[name="digest_schedule"]').value,
+  });
+  const resp = await fetch('{% url "agents:telegram" %}', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}'},
+    body: body,
+  });
+  if (resp.ok) {
+    alert('Configuration saved.');
+  } else {
+    const err = await resp.json();
+    alert('Error: ' + (err.error || 'Unknown'));
+  }
+});
+</script>
+{% endblock %}

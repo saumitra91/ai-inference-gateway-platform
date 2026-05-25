@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Agent Results{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Agent Results</h1>
+  <p class="muted">Browse all discovered results across agents.</p>
+</div>
+
+<div style="display:flex;gap:12px;margin:14px 0;flex-wrap:wrap;">
+  <form method="get" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <input class="input" name="q" placeholder="Search..." value="{{ search }}" style="width:200px;">
+    <select class="input" name="source" style="width:140px;">
+      <option value="">All Sources</option>
+      {% for s in sources %}
+        <option value="{{ s }}" {% if current_source == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select class="input" name="agent_id" style="width:160px;">
+      <option value="">All Agents</option>
+      {% for a in agents %}
+        <option value="{{ a.id }}" {% if current_agent == a.id|stringformat:"s" %}selected{% endif %}>{{ a.name }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn primary" type="submit">Filter</button>
+    <a class="btn" href="{% url 'agents:results' %}">Clear</a>
+  </form>
+</div>
+
+<div class="grid" style="grid-template-columns:1fr;">
+  {% for result in results %}
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:start;">
+        <div>
+          <strong>
+            {% if result.url %}
+              <a href="{{ result.url }}" target="_blank" rel="noreferrer" style="color:var(--accent);">{{ result.title|truncatewords:15 }}</a>
+            {% else %}
+              {{ result.title|truncatewords:15 }}
+            {% endif %}
+          </strong>
+          <span class="pill small" style="margin-left:8px;">{{ result.source }}</span>
+        </div>
+        {% if result.match_score %}
+          <span class="pill" style="border-color:rgba(94,245,193,0.35);color:var(--ok);">Score: {{ result.match_score|floatformat:1 }}</span>
+        {% endif %}
+      </div>
+      <div class="small muted" style="margin-top:6px;">
+        {% if result.summary %}
+          {{ result.summary|truncatewords:30 }}
+        {% else %}
+          {{ result.content|truncatewords:30 }}
+        {% endif %}
+      </div>
+      <div class="small muted" style="margin-top:4px;">
+        {{ result.agent.name }} — {{ result.created_at|timesince }} ago
+      </div>
+    </div>
+  {% empty %}
+    <div class="card">
+      <p class="muted">No results found. <a href="{% url 'agents:list' %}">Run an agent</a> to discover results.</p>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

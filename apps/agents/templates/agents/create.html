@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Create Agent{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Create Agent</h1>
+  <p class="muted">Configure a new autonomous research or job discovery agent.</p>
+</div>
+
+<div class="grid">
+  <div class="card span-2">
+    <form id="create-form" style="display:grid;gap:14px;">
+      {% csrf_token %}
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Name</label>
+        <input class="input" name="name" required placeholder="e.g. AI Infrastructure Monitor">
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Type</label>
+        <select class="input" name="type">
+          <option value="market_research">Market Research</option>
+          <option value="job_discovery">Job Discovery</option>
+        </select>
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Instructions</label>
+        <textarea class="input" name="instructions" rows="4" placeholder="Describe what this agent should look for..."></textarea>
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Search Query (optional)</label>
+        <input class="input" name="search_query" placeholder="e.g. AI infrastructure, MLOps">
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Sources</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label><input type="checkbox" name="sources" value="hackernews" checked> Hacker News</label>
+          <label><input type="checkbox" name="sources" value="reddit"> Reddit</label>
+          <label><input type="checkbox" name="sources" value="arxiv"> arXiv</label>
+          <label><input type="checkbox" name="sources" value="github_trending"> GitHub Trending</label>
+          <label><input type="checkbox" name="sources" value="remoteok"> RemoteOK</label>
+          <label><input type="checkbox" name="sources" value="yc_jobs"> YC Jobs</label>
+          <label><input type="checkbox" name="sources" value="greenhouse"> Greenhouse</label>
+          <label><input type="checkbox" name="sources" value="lever"> Lever</label>
+          <label><input type="checkbox" name="sources" value="rss"> RSS Feeds</label>
+        </div>
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Max Results</label>
+        <input class="input" name="max_results" type="number" value="25" min="1" max="100">
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">LLM Backend</label>
+        <select class="input" name="llm_backend_preference">
+          <option value="llamacpp">llama.cpp</option>
+          <option value="vllm">vLLM</option>
+        </select>
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Schedule (cron, optional)</label>
+        <input class="input" name="schedule_cron" placeholder="e.g. 0 8 * * 1 (Mondays 8 AM)">
+      </div>
+
+      <div class="field" style="display:grid;gap:6px;">
+        <label class="muted small">Digest Frequency</label>
+        <select class="input" name="digest_frequency">
+          <option value="disabled">Disabled</option>
+          <option value="real_time">Real Time</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button class="btn primary" type="submit">Create Agent</button>
+        <a class="btn" href="{% url 'agents:list' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('create-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const sources = [...form.querySelectorAll('[name="sources"]:checked')].map(cb => cb.value);
+  const body = JSON.stringify({
+    name: form.querySelector('[name="name"]').value,
+    type: form.querySelector('[name="type"]').value,
+    instructions: form.querySelector('[name="instructions"]').value,
+    search_query: form.querySelector('[name="search_query"]').value,
+    sources: sources,
+    max_results: parseInt(form.querySelector('[name="max_results"]').value),
+    llm_backend_preference: form.querySelector('[name="llm_backend_preference"]').value,
+    schedule_cron: form.querySelector('[name="schedule_cron"]').value,
+    digest_frequency: form.querySelector('[name="digest_frequency"]').value,
+  });
+  const resp = await fetch('{% url "agents:create" %}', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}'},
+    body: body,
+  });
+  if (resp.ok) {
+    const data = await resp.json();
+    window.location.href = '{% url "agents:list" %}';
+  } else {
+    const err = await resp.json();
+    alert('Error: ' + (err.error || 'Unknown'));
+  }
+});
+</script>
+{% endblock %}

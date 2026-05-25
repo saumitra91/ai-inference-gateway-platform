@@ -18,9 +18,15 @@ Client → nginx :8888 → FastAPI Gateway :8081 ──→ llama.cpp :8080 → G
 
 Django Control Plane :8000 ─── ChromaDB :8000 ─── sentence-transformers
        │
-       ├── RAG Chat UI   →  /rag/chat/
-       ├── PDF Upload     →  /rag/documents/
-       └── RAG API        →  /rag/api/completions (augmented prompt → selected backend)
+       ├── RAG Chat UI       →  /rag/chat/
+       ├── PDF Upload         →  /rag/documents/
+       ├── RAG API            →  /rag/api/completions
+       ├── Agents UI          →  /agents/
+       │   ├── List/Create    →  /agents/
+       │   ├── Results        →  /agents/results/
+       │   ├── Telegram       →  /agents/telegram/
+       │   └── API            →  /agents/api/
+       └── Agent Scheduler    →  APScheduler → AgentRunner → Pipelines
 ```
 
 ---
@@ -811,6 +817,155 @@ docs/
 
 ---
 
+## Agents & Automation
+
+The platform includes an autonomous research and job intelligence system (`apps/agents`) that runs deterministic, observable pipelines instead of chaotic agent loops.
+
+### Architecture
+
+```
+Agent Scheduler (APScheduler) → AgentRunner → Pipeline → Sources → LLM → Digest → Telegram
+                                                      │
+                                                      ├── ResearchPipeline
+                                                      │   ├── HackerNewsSource
+                                                      │   ├── RedditSource
+                                                      │   ├── GitHubTrendingSource
+                                                      │   ├── ArxivSource
+                                                      │   └── RSSSource
+                                                      │
+                                                      └── JobDiscoveryWorkflow
+                                                          ├── RemoteOKSource
+                                                          ├── GreenhouseSource
+                                                          ├── LeverSource
+                                                          ├── YCJobsSource
+                                                          └── RSSSource
+```
+
+### Agent Types
+
+| Type | Pipeline | Sources | Purpose |
+|---|---|---|---|
+| `market_research` | `ResearchPipeline` | HN, Reddit, GitHub, arXiv, RSS | Technology trend monitoring, hiring pattern analysis |
+| `job_discovery` | `JobDiscoveryWorkflow` | RemoteOK, Greenhouse, Lever, YC Jobs | Job discovery, relevance ranking, match explanation |
+
+### Pipeline Stages
+
+Every agent run follows explicit stages:
+1. **Collect** — Fetch from configured sources in parallel
+2. **Normalize** — Convert to uniform `SourceItem` schema
+3. **Deduplicate** — URL hash + semantic similarity (via sentence-transformers)
+4. **LLM Synthesis** — Summarize, rank, or synthesize using local LLMs
+5. **Persist** — Store results in PostgreSQL
+6. **Digest** — Assemble markdown digest (template + optional LLM generation)
+7. **Deliver** — Send digest via Telegram bot
+
+### Key Design Decisions
+
+- **Deterministic pipelines over autonomous agents** — No recursive self-calling, no planning loops, no chaotic behavior. Every run is a fixed sequence of typed stages with full observability.
+- **Local LLM integration** — Reuses the existing llama.cpp/vLLM inference stack. Per-agent backend selection. Used for summarization, ranking, trend synthesis, and digest generation.
+- **Semantic deduplication** — Uses the existing sentence-transformers infrastructure (all-MiniLM-L6-v2) for embedding-based similarity filtering (default threshold 0.92).
+- **APScheduler** — Cron-based scheduling with execution locking, misfire grace time, coalescing, and max-instances=1 to prevent overlapping runs.
+- **Pluggable sources** — Each source adapter implements `BaseSource` with `fetch()`, `normalize()`, and `health()` methods. Add new sources by creating a subclass and registering in `SOURCE_MAP`.
+
+### Telegram Integration
+
+- Batched digest notifications (no spammy per-result messages)
+- Markdown-safe formatting with character limits
+- Automatic chunking for long digests
+- Error notifications for failed agent runs
+- Configurable via Django UI (`/agents/telegram/`)
+
+### Models
+
+- **Agent** — UUID PK, name, slug, type, enabled, instructions, search_query, schedule_cron, digest_frequency, llm_backend_preference, sources JSON, max_results
+- **AgentRun** — FK agent, started_at, completed_at, status, duration_ms, tokens_used, discovered_count, sent_count, summary, error_message, raw_logs JSON
+- **AgentResult** — FK agent, FK run, title, url, source, content, summary, metadata JSON, semantic_hash, similarity_score, match_score
+- **TelegramConfig** — enabled, bot_token, chat_id, digest_enabled, digest_schedule
+
+### Prometheus Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| `agent_runs_total` | Counter | agent_type, agent_name, status |
+| `agent_failures_total` | Counter | agent_type, agent_name, error_type |
+| `agent_run_duration_seconds` | Histogram | agent_type, agent_name |
+| `agent_results_discovered_total` | Counter | agent_type, agent_name, source |
+| `agent_results_sent_total` | Counter | agent_type, agent_name |
+| `telegram_notifications_sent_total` | Counter | status |
+| `telegram_notification_failures_total` | Counter | error_type |
+| `agent_duplicate_results_filtered_total` | Counter | agent_type, agent_name |
+| `agent_llm_requests_total` | Counter | agent_type, backend |
+| `agent_embedding_requests_total` | Counter | agent_type |
+| `agent_source_fetch_latency_seconds` | Histogram | source, status |
+| `agent_active_runs` | Gauge | agent_type |
+| `agent_scheduler_queue_depth` | Gauge | — |
+
+### Grafana Dashboard
+
+The auto-provisioned "Agents & Automation" dashboard includes:
+- Run rate, active runs, error rate
+- Telegram delivery success/failure
+- Results discovery rate by type and source
+- Duplicate filter rate
+- Run duration percentiles (p50/p95)
+- Source fetch latency
+- LLM token usage by backend
+- Agent activity by type
+
+### Django UI Pages
+
+- `/agents/` — Agent list with status, run now, enable/disable
+- `/agents/create/` — Template-based agent creation
+- `/agents/<id>/` — Agent detail with run history
+- `/agents/results/` — Searchable results with filtering
+- `/agents/<id>/runs/<run_id>/` — Run detail with execution logs
+
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/agents/api/agents` | List agents |
+| GET | `/agents/api/agents/<id>/runs` | List runs |
+| GET | `/agents/api/agents/<id>/results` | List results |
+| POST | `/agents/<id>/run` | Trigger agent run |
+| POST | `/agents/<id>/toggle` | Enable/disable |
+| POST | `/agents/<id>/delete` | Delete agent |
+
+### Running the Scheduler
+
+The scheduler runs in a separate container:
+```bash
+docker-compose up -d agents-scheduler
+```
+
+Or via management command:
+```bash
+python manage.py run_agent_scheduler
+```
+
+### Scaling Bottlenecks
+
+1. **LLM throughput** — Each agent run makes multiple LLM calls (summarization, synthesis, ranking). With many agents, this can saturate the inference backends. Mitigation: per-agent backend selection, cooldown between runs.
+2. **Source fetch latency** — External API calls can be slow or rate-limited. Mitigation: per-source timeout (30s), parallel fetching, graceful degradation.
+3. **Database growth** — AgentResult rows accumulate quickly. Mitigation: retention policies for results and run logs.
+4. **Scheduler concurrency** — APScheduler runs jobs in the same process. Long-running jobs block the scheduler. Mitigation: max_instances=1, coalesce=True, misfire_grace_time.
+
+### Scheduler Tradeoffs
+
+- **APScheduler over Celery** — Simpler deployment (no broker needed for basic cron), fewer moving parts. Tradeoff: no distributed task queue, no complex workflows.
+- **Sync pipelines over async event loops** — Each pipeline runs as a single async function. Simpler debugging, explicit stages. Tradeoff: less granular concurrency within a single run.
+- **PostgreSQL over Redis for results** — Leverages Django ORM, admin, migrations. Tradeoff: higher latency for writes vs Redis.
+- **sentence-transformers over API-based embeddings** — No external dependency, runs locally. Tradeoff: memory usage (~500MB for all-MiniLM-L6-v2).
+
+### Extensibility
+
+- **New source adapters** — Create a class inheriting `BaseSource`, implement `fetch()`, register in `SOURCE_MAP`.
+- **New agent types** — Create a pipeline class, register in `PIPELINE_MAP`, add the type to `Agent.Type`.
+- **New delivery channels** — Implement a service following the `TelegramService` pattern.
+- **Custom ranking** — Swap the `RelevanceRanker` implementation or adjust the scoring formula.
+
+---
+
 ## Production readiness
 
 | Category | Status | Notes |
@@ -823,6 +978,7 @@ docs/
 | Security | 8/10 | HMAC-SHA256, timing-safe compare, Bearer auth, CSRF for UI, rate limiting |
 | Docker | 8/10 | Multi-stage builds, healthchecks, resource limits, restart policies |
 | RAG | 9/10 | PDF ingestion, chunking, embedding, ChromaDB retrieval, anti-hallucination prompt, source citations, 10 RAG metrics, 7 Grafana panels |
+| Agents | 9/10 | Deterministic pipelines, 9 source adapters, semantic dedup, LLM synthesis, Telegram digests, APScheduler, 13 Prometheus metrics, 14 Grafana panels, 5 Django UI pages |
 | Testing | 8/10 | 9 profiling + 3 benchmark k6 scripts: head-to-head comparison, single-backend benchmarks |
 
 ---

@@ -7,6 +7,7 @@ from django.urls import include, path
 from apps.observability.views import live_view, metrics_view, model_status_view, ready_view
 
 urlpatterns = [
+    path("agents/", include(("apps.agents.urls", "agents"), namespace="agents")),
     path("accounts/login/", auth_views.LoginView.as_view(template_name="registration/login.html")),
     path("accounts/logout/", auth_views.LogoutView.as_view()),
     path("admin/", admin.site.urls),
